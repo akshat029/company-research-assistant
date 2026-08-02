@@ -43,7 +43,7 @@ def scrape_website(url: str, timeout: int = 15) -> str:
 
         # Clean up excessive whitespace
         lines = [line.strip() for line in text.splitlines() if line.strip()]
-        cleaned = '\n'.join(lines)
+        cleaned = '\n'.join(lines)[:4000]
 
         # Limit to 6000 chars (~1500 tokens) to stay under Groq free-tier limits
         content = title + meta_desc + cleaned
