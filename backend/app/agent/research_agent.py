@@ -6,8 +6,6 @@ from typing import Optional
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import tool
-from langchain_openai import ChatOpenAI
-from langchain_groq import ChatGroq
 from langgraph.prebuilt import create_react_agent
 
 from app.config import get_settings
@@ -23,8 +21,13 @@ settings = get_settings()
 
 
 def get_llm():
-    """Get the configured LLM."""
+    """Get the configured LLM.
+
+    Provider SDKs are imported lazily so that a missing optional dependency
+    (e.g. langchain_openai when running on Groq) cannot break this module.
+    """
     if settings.LLM_PROVIDER == "groq" and settings.GROQ_API_KEY:
+        from langchain_groq import ChatGroq
         return ChatGroq(
             api_key=settings.GROQ_API_KEY,
             model=settings.GROQ_MODEL,
@@ -32,6 +35,7 @@ def get_llm():
             max_tokens=settings.LLM_MAX_TOKENS,
         )
     elif settings.OPENAI_API_KEY:
+        from langchain_openai import ChatOpenAI
         return ChatOpenAI(
             api_key=settings.OPENAI_API_KEY,
             model=settings.OPENAI_MODEL,
@@ -52,7 +56,7 @@ def get_tavily_client():
     return TavilyClient(api_key=settings.TAVILY_API_KEY)
 
 
-# ─── LangChain Tools ────────────────────────────────────────────────────────
+# ─── LangChain Tools ──────────────────────────────────────────────────────────
 
 @tool
 def web_search(query: str) -> str:
@@ -61,9 +65,9 @@ def web_search(query: str) -> str:
         client = get_tavily_client()
         results = client.search(
             query=query,
-            search_depth="advanced",
+            search_depth="basic",
             max_results=settings.MAX_SEARCH_RESULTS,
-            include_answer=True,
+            include_answer=False,
         )
         answer = results.get('answer', '')
         raw_results = results.get('results', [])
@@ -83,7 +87,7 @@ def search_news(company_name: str) -> str:
         client = get_tavily_client()
         results = client.search(
             query=f"{company_name} latest news announcements 2024 2025",
-            search_depth="advanced",
+            search_depth="basic",
             max_results=8,
             topic="news",
         )
@@ -99,7 +103,7 @@ def scrape_url(url: str) -> str:
     return scrape_website(url)
 
 
-# ─── Main Research Agent ─────────────────────────────────────────────────────
+# ─── Main Research Agent ──────────────────────────────────────────────────────
 
 class CompanyResearchAgent:
     """Main agent that orchestrates company research."""

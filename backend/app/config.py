@@ -19,7 +19,10 @@ class Settings(BaseSettings):
     OPENAI_MODEL: str = "gpt-4o"
     GROQ_MODEL: str = "llama-3.3-70b-versatile"
     LLM_TEMPERATURE: float = 0.0
-    LLM_MAX_TOKENS: int = 4096
+    # NOTE: reserved output tokens count against Groq's tokens-per-minute (TPM)
+    # quota. The free tier allows 12,000 TPM, so keep this modest or requests
+    # fail with HTTP 413 "Request too large".
+    LLM_MAX_TOKENS: int = 2048
 
     # Research Settings
     MAX_SEARCH_RESULTS: int = 8
