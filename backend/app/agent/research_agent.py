@@ -20,19 +20,26 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
-def get_llm():
+def get_llm(max_tokens: Optional[int] = None):
     """Get the configured LLM.
 
     Provider SDKs are imported lazily so that a missing optional dependency
     (e.g. langchain_openai when running on Groq) cannot break this module.
+
+    Args:
+        max_tokens: override the output token budget. The research stage and
+            the extraction stage have very different needs, so they each build
+            their own client.
     """
+    tokens = max_tokens if max_tokens is not None else settings.LLM_MAX_TOKENS
+
     if settings.LLM_PROVIDER == "groq" and settings.GROQ_API_KEY:
         from langchain_groq import ChatGroq
         return ChatGroq(
             api_key=settings.GROQ_API_KEY,
             model=settings.GROQ_MODEL,
             temperature=settings.LLM_TEMPERATURE,
-            max_tokens=settings.LLM_MAX_TOKENS,
+            max_tokens=tokens,
         )
     elif settings.OPENAI_API_KEY:
         from langchain_openai import ChatOpenAI
@@ -40,7 +47,7 @@ def get_llm():
             api_key=settings.OPENAI_API_KEY,
             model=settings.OPENAI_MODEL,
             temperature=settings.LLM_TEMPERATURE,
-            max_tokens=settings.LLM_MAX_TOKENS,
+            max_tokens=tokens,
         )
     else:
         raise ValueError(
@@ -88,7 +95,7 @@ def search_news(company_name: str) -> str:
         results = client.search(
             query=f"{company_name} latest news announcements 2024 2025",
             search_depth="basic",
-            max_results=8,
+            max_results=settings.MAX_SEARCH_RESULTS,
             topic="news",
         )
         return format_search_results(results.get('results', []))
@@ -106,7 +113,17 @@ def scrape_url(url: str) -> str:
 # ─── Main Research Agent ──────────────────────────────────────────────────────
 
 class CompanyResearchAgent:
-    """Main agent that orchestrates company research."""
+    """Orchestrates company research as two decoupled stages.
+
+    Stage 1 (gather): a ReAct agent calls search/scrape tools and writes a
+    plain-text research brief. No JSON schema is sent into this loop, so the
+    prompt is not re-transmitted on every turn.
+
+    Stage 2 (extract): a single tool-free call converts that brief into a
+    CompanyResearchResult. Structured output is bound to the Pydantic model,
+    so the provider fills the schema via function calling instead of the model
+    hand-writing JSON that can be truncated mid-string.
+    """
 
     def __init__(self):
         self.llm = get_llm()
@@ -116,14 +133,44 @@ class CompanyResearchAgent:
             tools=self.tools,
         )
 
+        # Separate client for extraction: no tools, larger output budget.
+        self.extraction_llm = get_llm(max_tokens=settings.EXTRACTION_MAX_TOKENS)
+        try:
+            self.extractor = self.extraction_llm.with_structured_output(
+                CompanyResearchResult
+            )
+        except Exception as e:
+            # Some providers reject complex nested schemas. Fall back to
+            # free-text JSON plus manual parsing.
+            logger.warning(f"Structured output unavailable, using text fallback: {e}")
+            self.extractor = None
+
+    # ─── Public API ────────────────────────────────────────────────────
+
     def research(self, query: str, depth: str = "standard") -> CompanyResearchResult:
-        """Execute full company research pipeline."""
+        """Execute the full research pipeline."""
         start_time = time.time()
         company_name, website_url, is_url = resolve_query(query)
 
-        logger.info(f"Researching: '{company_name}' | URL: '{website_url}' | Depth: {depth}")
+        logger.info(
+            f"Researching: '{company_name}' | URL: '{website_url}' | Depth: {depth}"
+        )
 
-        # Build research instruction
+        brief = self._gather(company_name, website_url, depth)
+        logger.info(f"Research brief: {len(brief)} chars")
+
+        result = self._extract(brief, company_name, website_url)
+        result.researched_at = datetime.utcnow().isoformat() + "Z"
+
+        elapsed = time.time() - start_time
+        logger.info(f"Research completed in {elapsed:.1f}s")
+
+        return result
+
+    # ─── Stage 1: gather ────────────────────────────────────────────────
+
+    def _gather(self, company_name: str, website_url: str, depth: str) -> str:
+        """Run the tool-using agent and return a plain-text research brief."""
         url_context = f" Their website is {website_url}." if website_url else ""
         depth_instruction = {
             "quick": "Do a quick focused overview (5-6 searches max).",
@@ -131,12 +178,11 @@ class CompanyResearchAgent:
             "deep": "Do an exhaustive deep-dive (12+ searches, scrape the website).",
         }.get(depth, "Do thorough research (8-10 searches).")
 
-        research_task = f"""
-Research the company: "{company_name}".{url_context}
+        research_task = f"""Research the company: "{company_name}".{url_context}
 
 {depth_instruction}
 
-Gather:
+Investigate and report on:
 1. Company overview (description, industry, founding year, HQ, size, type)
 2. Products and services
 3. Leadership team (CEO, CTO, founders)
@@ -148,93 +194,81 @@ Gather:
 9. Culture and values
 10. Hiring/jobs status
 
-After gathering all info, compile everything into a comprehensive JSON matching 
-this exact structure (use null for missing fields):
+Write your findings as a concise plain-text brief organised under those
+headings. Put the source URL next to each fact where you have one, and list
+every URL you used at the end under "Sources:".
 
-{{
-  "basic_info": {{
-    "name": "...",
-    "website": "...",
-    "description": "...",
-    "industry": "...",
-    "founded": "...",
-    "headquarters": "...",
-    "company_size": "...",
-    "company_type": "...",
-    "stock_ticker": null,
-    "tagline": "..."
-  }},
-  "products_and_services": [
-    {{"name": "...", "description": "...", "category": "..."}}
-  ],
-  "leadership": [
-    {{"name": "...", "title": "...", "bio": "..."}}
-  ],
-  "recent_news": [
-    {{"title": "...", "summary": "...", "url": "...", "date": "...", "source": "...", "sentiment": "positive|neutral|negative"}}
-  ],
-  "financial_info": {{
-    "total_funding": "...",
-    "last_valuation": "...",
-    "revenue": null,
-    "funding_rounds": [
-      {{"round_type": "...", "amount": "...", "date": "...", "investors": [...]}}
-    ],
-    "investors": [...],
-    "ipo_status": "..."
-  }},
-  "competitors": [
-    {{"name": "...", "website": "...", "description": "..."}}
-  ],
-  "market_position": "...",
-  "target_market": "...",
-  "tech_stack": [
-    {{"category": "...", "technologies": [...]}}
-  ],
-  "social_media": {{
-    "linkedin": "...",
-    "twitter": "...",
-    "github": "..."
-  }},
-  "culture_and_values": "...",
-  "hiring_status": "...",
-  "open_roles_summary": "...",
-  "swot_analysis": {{
-    "strengths": [...],
-    "weaknesses": [...],
-    "opportunities": [...],
-    "threats": [...]
-  }},
-  "ai_summary": "3-4 sentence executive summary",
-  "research_confidence": "high|medium|low",
-  "sources": ["url1", "url2", ...]
-}}
-
-Return ONLY the JSON object, no other text.
+Do NOT output JSON. A separate step handles formatting.
 """
 
-        # Run the agent
-        messages = [HumanMessage(content=research_task)]
+        messages = [
+            SystemMessage(content=RESEARCH_SYSTEM_PROMPT),
+            HumanMessage(content=research_task),
+        ]
+
         result = self.agent.invoke(
             {"messages": messages},
-            config={"recursion_limit": 8},
+            config={"recursion_limit": settings.AGENT_RECURSION_LIMIT},
+        )
+        return result["messages"][-1].content
+
+    # ─── Stage 2: extract ───────────────────────────────────────────────
+
+    def _extract(
+        self, brief: str, company_name: str, website_url: str
+    ) -> CompanyResearchResult:
+        """Convert a research brief into a validated CompanyResearchResult."""
+        payload = f"Company: {company_name}\n\nResearch brief:\n\n{brief}"
+
+        # Preferred path: provider fills the Pydantic schema directly.
+        if self.extractor is not None:
+            try:
+                result = self.extractor.invoke(
+                    [
+                        SystemMessage(content=EXTRACTION_PROMPT),
+                        HumanMessage(content=payload),
+                    ]
+                )
+                if isinstance(result, CompanyResearchResult):
+                    return result
+                if isinstance(result, dict):
+                    return CompanyResearchResult(**result)
+                logger.warning(f"Unexpected extractor return type: {type(result)}")
+            except Exception as e:
+                logger.warning(f"Structured extraction failed, falling back: {e}")
+
+        # Fallback path: ask for raw JSON and parse it by hand.
+        try:
+            raw = self.extraction_llm.invoke(
+                [
+                    SystemMessage(
+                        content=EXTRACTION_PROMPT
+                        + "\n\nReturn ONLY valid JSON, no other text."
+                    ),
+                    HumanMessage(content=payload),
+                ]
+            ).content
+            return CompanyResearchResult(**self._parse_json_response(raw))
+        except Exception as e:
+            logger.error(f"Extraction failed entirely: {e}")
+            return self._degraded_result(brief, company_name, website_url)
+
+    def _degraded_result(
+        self, brief: str, company_name: str, website_url: str
+    ) -> CompanyResearchResult:
+        """Last resort: surface what we know instead of a blank 'Unknown' card."""
+        return CompanyResearchResult(
+            basic_info=CompanyBasicInfo(
+                name=company_name,
+                website=website_url or None,
+                description="Structured extraction failed. Raw research below.",
+            ),
+            ai_summary=brief[:1000] if brief else None,
+            research_confidence="low",
         )
 
-        # Extract the final message
-        final_message = result["messages"][-1].content
-
-        # Parse JSON from the response
-        research_data = self._parse_json_response(final_message)
-        research_data["researched_at"] = datetime.utcnow().isoformat() + "Z"
-
-        elapsed = time.time() - start_time
-        logger.info(f"Research completed in {elapsed:.1f}s")
-
-        return CompanyResearchResult(**research_data)
-
     def _parse_json_response(self, text: str) -> dict:
-        """Parse JSON from LLM response, handling code blocks."""
-        # Remove markdown code blocks if present
+        """Parse JSON from an LLM response, handling markdown code blocks."""
         text = text.strip()
         if text.startswith("```json"):
             text = text[7:]
@@ -244,19 +278,9 @@ Return ONLY the JSON object, no other text.
             text = text[:-3]
         text = text.strip()
 
-        # Find JSON object
         start = text.find('{')
         end = text.rfind('}')
         if start != -1 and end != -1:
-            text = text[start:end+1]
+            text = text[start:end + 1]
 
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON parse error: {e}")
-            # Return minimal valid structure
-            return {
-                "basic_info": {"name": "Unknown", "description": "Research completed but JSON parsing failed."},
-                "ai_summary": text[:500],
-                "research_confidence": "low"
-            }
+        return json.loads(text)
