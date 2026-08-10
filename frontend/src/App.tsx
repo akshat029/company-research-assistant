@@ -1,149 +1,197 @@
-import React, { useState } from 'react';
-import { SearchBar } from './components/SearchBar';
+import { AnimatePresence, motion } from 'framer-motion';
+import { Radar, ShieldCheck, Sparkles } from 'lucide-react';
+import { Aurora } from './components/Aurora';
 import { CompanyProfile } from './components/CompanyProfile';
-import { LoadingState } from './components/LoadingState';
 import { ErrorState } from './components/ErrorState';
+import { LoadingState } from './components/LoadingState';
+import { SearchBar } from './components/SearchBar';
+import { useHealth } from './hooks/useHealth';
 import { useResearch } from './hooks/useResearch';
-import { DepthOption } from './types';
-import { Building2, Github, Zap, Search, Globe } from 'lucide-react';
+import { cn } from './lib/utils';
+import type { DepthOption } from './types';
 
-export default function App() {
-  const { data, loading, error, progress, research, reset } = useResearch();
-  const [lastQuery, setLastQuery] = useState('');
+const STATUS_STYLES = {
+  checking: { dot: 'bg-slate-500', text: 'text-slate-500', label: 'checking API' },
+  online: { dot: 'bg-accent-lime', text: 'text-accent-lime', label: 'API online' },
+  offline: { dot: 'bg-accent-rose', text: 'text-accent-rose', label: 'API offline' },
+} as const;
 
-  const handleSearch = async (query: string, depth: DepthOption) => {
-    setLastQuery(query);
-    await research({ query, depth });
+function App() {
+  const { data, loading, error, progress, phases, phaseIndex, elapsed, research, reset, cancel } =
+    useResearch();
+  const { status, health } = useHealth();
+
+  const handleSearch = (query: string, depth: DepthOption) => {
+    void research({ query, depth });
   };
 
-  const handleReset = () => {
-    reset();
-    setLastQuery('');
-  };
+  const showHero = !data && !loading && !error;
+  const statusStyle = STATUS_STYLES[status];
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Navigation */}
-      <nav className="bg-white border-b border-surface-200 sticky top-0 z-40 backdrop-blur-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
-            {/* Logo */}
-            <button onClick={handleReset} className="flex items-center gap-2.5 hover:opacity-80 transition-opacity">
-              <div className="w-8 h-8 bg-blue-600 rounded-xl flex items-center justify-center">
-                <Search size={16} className="text-white" />
-              </div>
-              <span className="font-semibold text-gray-900">Company Research</span>
-              <span className="hidden sm:inline text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full font-medium">AI</span>
-            </button>
+    <div className="relative min-h-screen">
+      <Aurora />
 
-            {/* Nav right */}
-            <div className="flex items-center gap-4">
-              <span className="hidden sm:flex items-center gap-1.5 text-xs text-gray-500">
-                <Zap size={12} className="text-blue-500" />
-                Powered by LangChain + GPT-4o
+      {/* ---------------------------------------------------------- header */}
+      <header className="sticky top-0 z-30 border-b border-white/[0.06] bg-ink-950/70 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-3 sm:px-6">
+          <button
+            type="button"
+            onClick={reset}
+            className="group flex items-center gap-2.5 text-left"
+            aria-label="Reset search"
+          >
+            <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-accent-indigo to-accent-violet shadow-glow">
+              <Radar className="h-4 w-4 text-white" />
+            </span>
+            <span>
+              <span className="block text-sm font-semibold tracking-tight text-slate-100">
+                Company Research
               </span>
-              <a
-                href="http://localhost:8000/docs"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-xs text-gray-500 hover:text-blue-600 transition-colors px-3 py-1.5 rounded-lg hover:bg-gray-50 border border-surface-200"
-              >
-                API Docs
-              </a>
-            </div>
+              <span className="block text-[10px] uppercase tracking-[0.16em] text-slate-600">
+                Sourced intelligence
+              </span>
+            </span>
+          </button>
+
+          <div className="flex items-center gap-3">
+            <span
+              className={cn(
+                'hidden items-center gap-1.5 rounded-full border border-white/[0.07] px-2.5 py-1 text-[11px] sm:inline-flex',
+                statusStyle.text,
+              )}
+              title={
+                health ? `provider: ${health.llm_provider} \u00b7 v${health.version}` : undefined
+              }
+            >
+              <span className={cn('h-1.5 w-1.5 rounded-full', statusStyle.dot)} />
+              {statusStyle.label}
+            </span>
+            {health?.llm_provider && (
+              <span className="hidden text-[11px] text-slate-600 md:inline">
+                {health.llm_provider}
+              </span>
+            )}
           </div>
         </div>
-      </nav>
+      </header>
 
-      {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      {/* ------------------------------------------------------------ main */}
+      <main className="mx-auto max-w-6xl px-4 pb-24 pt-10 sm:px-6">
+        <AnimatePresence mode="wait">
+          {showHero && (
+            <motion.div
+              key="hero"
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -12 }}
+              transition={{ duration: 0.4 }}
+              className="mx-auto max-w-3xl pt-8 text-center"
+            >
+              <span className="inline-flex items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.03] px-3 py-1 text-[11px] text-slate-400">
+                <Sparkles className="h-3 w-3 text-accent-violet" />
+                Live web research, not model memory
+              </span>
 
-        {/* Hero section — shown when idle */}
-        {!data && !loading && !error && (
-          <div className="py-20 flex flex-col items-center text-center">
-            {/* Hero badge */}
-            <div className="inline-flex items-center gap-2 px-4 py-2 bg-blue-50 border border-blue-100 rounded-full text-blue-700 text-sm font-medium mb-8">
-              <Zap size={14} />
-              AI-Powered Company Intelligence
-            </div>
+              <h1 className="mt-6 text-balance text-4xl font-bold tracking-tight sm:text-6xl">
+                <span className="text-gradient">Know any company</span>
+                <br />
+                <span className="text-slate-400">in under a minute</span>
+              </h1>
 
-            <h1 className="text-5xl font-bold text-gray-900 mb-4 leading-tight">
-              Research Any Company
-              <br />
-              <span className="text-blue-600">Instantly with AI</span>
-            </h1>
+              <p className="mx-auto mt-5 max-w-xl text-pretty text-sm leading-relaxed text-slate-400 sm:text-base">
+                Enter a name or a domain. Every claim is grounded in a live search, every date comes
+                from the source itself, and any link the agent cannot prove it retrieved is withheld
+                rather than guessed.
+              </p>
 
-            <p className="text-xl text-gray-500 mb-12 max-w-2xl">
-              Enter a company name or website URL. Get a comprehensive research report 
-              covering overview, products, leadership, news, financials, competitors, and more.
-            </p>
+              <div className="mt-9 text-left">
+                <SearchBar onSearch={handleSearch} loading={loading} />
+              </div>
 
-            {/* Search bar */}
-            <SearchBar onSearch={handleSearch} loading={loading} />
-
-            {/* Feature highlights */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-16 w-full max-w-3xl">
-              {[
-                { icon: Building2, label: 'Company Overview', color: 'text-blue-500 bg-blue-50' },
-                { icon: Globe, label: 'Products & News', color: 'text-purple-500 bg-purple-50' },
-                { icon: Zap, label: 'Funding & Finance', color: 'text-yellow-500 bg-yellow-50' },
-                { icon: Search, label: 'SWOT Analysis', color: 'text-green-500 bg-green-50' },
-              ].map(({ icon: Icon, label, color }) => (
-                <div key={label} className="flex flex-col items-center gap-2 p-4 bg-white rounded-2xl border border-surface-200 shadow-soft">
-                  <div className={`p-2.5 rounded-xl ${color.split(' ')[1]}`}>
-                    <Icon size={18} className={color.split(' ')[0]} />
+              <div className="mt-10 grid gap-3 text-left sm:grid-cols-3">
+                {[
+                  {
+                    icon: ShieldCheck,
+                    title: 'Verified links',
+                    body: 'Each URL is checked against what the search actually returned.',
+                  },
+                  {
+                    icon: Radar,
+                    title: 'Real dates',
+                    body: 'Publication dates come from the index, not from the model.',
+                  },
+                  {
+                    icon: Sparkles,
+                    title: 'Honest gaps',
+                    body: 'Unsupported claims are flagged instead of quietly invented.',
+                  },
+                ].map((f) => (
+                  <div
+                    key={f.title}
+                    className="glass rounded-xl p-4 transition-colors hover:border-white/[0.12]"
+                  >
+                    <f.icon className="h-4 w-4 text-accent-cyan" />
+                    <p className="mt-2 text-sm font-medium text-slate-200">{f.title}</p>
+                    <p className="mt-1 text-xs leading-relaxed text-slate-500">{f.body}</p>
                   </div>
-                  <span className="text-xs font-medium text-gray-600 text-center">{label}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+                ))}
+              </div>
+            </motion.div>
+          )}
 
-        {/* Search bar — shown when there's data */}
-        {(data || error) && !loading && (
-          <div className="py-6">
-            <SearchBar onSearch={handleSearch} loading={loading} />
-          </div>
-        )}
+          {!showHero && (
+            <motion.div
+              key="searchbar"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="mx-auto mb-8 max-w-4xl"
+            >
+              <SearchBar onSearch={handleSearch} loading={loading} />
+            </motion.div>
+          )}
+        </AnimatePresence>
 
-        {/* Loading state */}
-        {loading && <LoadingState progress={progress} query={lastQuery} />}
+        <AnimatePresence mode="wait">
+          {loading && (
+            <LoadingState
+              key="loading"
+              progress={progress}
+              query={data?.query ?? ''}
+              phases={phases}
+              phaseIndex={phaseIndex}
+              elapsed={elapsed}
+              onCancel={cancel}
+            />
+          )}
 
-        {/* Error state */}
-        {error && !loading && (
-          <ErrorState error={error} onRetry={() => handleSearch(lastQuery, 'standard')} />
-        )}
+          {!loading && error && <ErrorState key="error" error={error} onRetry={reset} />}
 
-        {/* Results */}
-        {data && data.result && !loading && (
-          <CompanyProfile
-            result={data.result}
-            query={data.query}
-            duration={data.duration_seconds}
-            cached={data.cached}
-          />
-        )}
+          {!loading && !error && data?.result && (
+            <CompanyProfile
+              key="result"
+              result={data.result}
+              query={data.query}
+              duration={data.duration_seconds}
+              cached={data.cached}
+            />
+          )}
+        </AnimatePresence>
       </main>
 
-      {/* Footer */}
-      <footer className="mt-24 border-t border-surface-200 bg-white">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-gray-400">
-            <div className="flex items-center gap-2">
-              <div className="w-5 h-5 bg-blue-600 rounded-md flex items-center justify-center">
-                <Search size={10} className="text-white" />
-              </div>
-              <span>Company Research Assistant</span>
-            </div>
-            <div className="flex items-center gap-4">
-              <span>Built with LangChain + FastAPI + React</span>
-              <a href="http://localhost:8000/docs" target="_blank" rel="noopener noreferrer"
-                className="hover:text-blue-600 transition-colors">API Docs</a>
-            </div>
-          </div>
+      {/* ---------------------------------------------------------- footer */}
+      <footer className="border-t border-white/[0.06] py-6">
+        <div className="mx-auto flex max-w-6xl flex-col items-center gap-1 px-4 text-center sm:px-6">
+          <p className="text-[11px] text-slate-600">
+            FastAPI + LangGraph ReAct agent · Tavily retrieval · React + Vite
+          </p>
+          <p className="text-[11px] text-slate-700">
+            Results are grounded in live search and may still be incomplete. Verify anything critical.
+          </p>
         </div>
       </footer>
     </div>
   );
 }
+
+export default App;
