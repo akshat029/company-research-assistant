@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { Radar, ShieldCheck, Sparkles } from 'lucide-react';
+import { Lightbulb, Radar, ShieldCheck, Sparkles } from 'lucide-react';
 import { Aurora } from './components/Aurora';
 import { CompanyProfile } from './components/CompanyProfile';
 import { ErrorState } from './components/ErrorState';
@@ -21,8 +21,8 @@ function App() {
     useResearch();
   const { status, health } = useHealth();
 
-  const handleSearch = (query: string, depth: DepthOption) => {
-    void research({ query, depth });
+  const handleSearch = (query: string, depth: DepthOption, includeAnalysis: boolean) => {
+    void research({ query, depth, include_analysis: includeAnalysis });
   };
 
   const showHero = !data && !loading && !error;
@@ -61,7 +61,7 @@ function App() {
                 statusStyle.text,
               )}
               title={
-                health ? `provider: ${health.llm_provider} \u00b7 v${health.version}` : undefined
+                health ? `provider: ${health.llm_provider} \\u00b7 v${health.version}` : undefined
               }
             >
               <span className={cn('h-1.5 w-1.5 rounded-full', statusStyle.dot)} />
@@ -100,16 +100,17 @@ function App() {
               </h1>
 
               <p className="mx-auto mt-5 max-w-xl text-pretty text-sm leading-relaxed text-slate-400 sm:text-base">
-                Enter a name or a domain. Every claim is grounded in a live search, every date comes
-                from the source itself, and any link the agent cannot prove it retrieved is withheld
-                rather than guessed.
+                Enter a name or a domain. Every fact is transcribed from a live search, every date
+                comes from the source itself, and any link the agent cannot prove it retrieved is
+                withheld rather than guessed. A separate analyst pass then turns those verified
+                facts into the read a consultancy would charge for.
               </p>
 
               <div className="mt-9 text-left">
                 <SearchBar onSearch={handleSearch} loading={loading} />
               </div>
 
-              <div className="mt-10 grid gap-3 text-left sm:grid-cols-3">
+              <div className="mt-10 grid gap-3 text-left sm:grid-cols-2 lg:grid-cols-4">
                 {[
                   {
                     icon: ShieldCheck,
@@ -125,6 +126,11 @@ function App() {
                     icon: Sparkles,
                     title: 'Honest gaps',
                     body: 'Unsupported claims are flagged instead of quietly invented.',
+                  },
+                  {
+                    icon: Lightbulb,
+                    title: 'Analyst read',
+                    body: 'Thesis, ranked risks and non-obvious signals, each citing its sources.',
                   },
                 ].map((f) => (
                   <div
@@ -186,7 +192,8 @@ function App() {
             FastAPI + LangGraph ReAct agent · Tavily retrieval · React + Vite
           </p>
           <p className="text-[11px] text-slate-700">
-            Results are grounded in live search and may still be incomplete. Verify anything critical.
+            Results are grounded in live search and may still be incomplete. Verify anything
+            critical.
           </p>
         </div>
       </footer>
