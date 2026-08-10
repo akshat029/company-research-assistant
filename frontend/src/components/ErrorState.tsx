@@ -16,6 +16,26 @@ interface Props {
 function diagnose(error: string) {
   const e = error.toLowerCase();
 
+  // A missing dependency is the single most actionable failure there is: the
+  // exact package name is right there in the message, so print the exact
+  // command. Falling through to the generic branch here wasted a real run.
+  if (e.includes('no module named') || e.includes('modulenotfounderror')) {
+    const match = error.match(/no module named ['"]?([\\w.]+)/i);
+    const pkg = (match?.[1] ?? '').replace(/_/g, '-');
+    return {
+      icon: Terminal,
+      tone: 'text-accent-amber',
+      title: pkg ? `The backend is missing ${pkg}` : 'A Python package is missing',
+      steps: [
+        'Open a terminal in the backend folder',
+        'Activate the venv: venv\\\\Scripts\\\\activate',
+        pkg ? `Install it: pip install ${pkg}` : 'Install the missing package',
+        'Safest: pip install -r requirements.txt',
+        'Restart uvicorn, then retry',
+      ],
+    };
+  }
+
   if (e.includes('cannot reach') || e.includes('network') || e.includes('port 8000')) {
     return {
       icon: WifiOff,
@@ -23,7 +43,7 @@ function diagnose(error: string) {
       title: 'The backend is not reachable',
       steps: [
         'Open a terminal in the backend folder',
-        'Activate the venv: venv\\Scripts\\activate',
+        'Activate the venv: venv\\\\Scripts\\\\activate',
         'Run: python -m uvicorn app.main:app --reload --port 8000',
         'Confirm http://localhost:8000/api/v1/health returns ok',
       ],
