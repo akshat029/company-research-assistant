@@ -1,6 +1,8 @@
 export interface ResearchRequest {
   query: string;
   depth: 'quick' | 'standard' | 'deep';
+  /** Run the analyst stage. Costs one extra LLM call on the backend. */
+  include_analysis?: boolean;
 }
 
 export interface CompanyBasicInfo {
@@ -97,6 +99,49 @@ export interface SourceRef {
   kind?: string;
 }
 
+/**
+ * One analytical claim.
+ *
+ * `derived_from` holds indices into `source_details`. The backend drops any
+ * index that does not resolve, so an index present here always points at a
+ * real, retrieved source.
+ */
+export interface AnalysisPoint {
+  point: string;
+  rationale?: string;
+  derived_from: number[];
+  confidence?: 'high' | 'medium' | 'low';
+}
+
+export interface RiskItem {
+  risk: string;
+  severity?: 'high' | 'medium' | 'low';
+  rationale?: string;
+  derived_from: number[];
+}
+
+/**
+ * Stage 4 output: inference, deliberately kept in its own object.
+ *
+ * Every other field on `CompanyResearchResult` was transcribed from a page that
+ * was actually retrieved. Everything here is judgement derived from those
+ * facts. They are modelled apart so the UI can keep the distinction visible
+ * rather than blending sourced fact and opinion into one page.
+ */
+export interface CompanyAnalysis {
+  thesis?: string;
+  why_now: AnalysisPoint[];
+  competitive_position: AnalysisPoint[];
+  moat: AnalysisPoint[];
+  risks: RiskItem[];
+  non_obvious: AnalysisPoint[];
+  questions_to_ask: string[];
+  unknowns: string[];
+  analyst_confidence?: 'high' | 'medium' | 'low';
+  /** Which model produced this read. */
+  generated_by?: string;
+}
+
 export interface CompanyResearchResult {
   basic_info?: CompanyBasicInfo;
   products_and_services?: ProductService[];
@@ -120,6 +165,8 @@ export interface CompanyResearchResult {
   /** Human-readable age of the freshest retrieved source, e.g. "12 days old". */
   data_freshness?: string;
   researched_at?: string;
+  /** Present only when the analyst stage ran and succeeded. */
+  analysis?: CompanyAnalysis;
 }
 
 export interface ResearchResponse {
