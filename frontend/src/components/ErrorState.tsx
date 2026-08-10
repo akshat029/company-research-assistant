@@ -23,7 +23,7 @@ function diagnose(error: string) {
       title: 'The backend is not reachable',
       steps: [
         'Open a terminal in the backend folder',
-        'Activate the venv: venv\\\\Scripts\\\\activate',
+        'Activate the venv: venv\\Scripts\\activate',
         'Run: python -m uvicorn app.main:app --reload --port 8000',
         'Confirm http://localhost:8000/api/v1/health returns ok',
       ],
