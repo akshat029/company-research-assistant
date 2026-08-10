@@ -24,13 +24,13 @@ interface UseResearchReturn {
 
 const PHASES: Record<string, ResearchPhase[]> = {
   quick: [
-    { label: 'Spinning up agent', hint: 'Loading tools and today\u2019s date' },
+    { label: 'Spinning up agent', hint: 'Loading tools and today\\u2019s date' },
     { label: 'Searching the live web', hint: 'Company overview and official site' },
     { label: 'Scanning recent news', hint: 'Filtered to a recency window' },
     { label: 'Verifying every link', hint: 'Dropping anything not retrieved' },
   ],
   standard: [
-    { label: 'Spinning up agent', hint: 'Loading tools and today\u2019s date' },
+    { label: 'Spinning up agent', hint: 'Loading tools and today\\u2019s date' },
     { label: 'Searching the live web', hint: 'Company overview and official site' },
     { label: 'Products and positioning', hint: 'What they actually sell' },
     { label: 'Leadership and funding', hint: 'Named people, real rounds' },
@@ -39,7 +39,7 @@ const PHASES: Record<string, ResearchPhase[]> = {
     { label: 'Verifying every link', hint: 'Dropping anything not retrieved' },
   ],
   deep: [
-    { label: 'Spinning up agent', hint: 'Loading tools and today\u2019s date' },
+    { label: 'Spinning up agent', hint: 'Loading tools and today\\u2019s date' },
     { label: 'Searching the live web', hint: 'Company overview and official site' },
     { label: 'Reading the company site', hint: 'First-party copy, budgeted' },
     { label: 'Products and positioning', hint: 'What they actually sell' },
@@ -93,7 +93,19 @@ export function useResearch(): UseResearchReturn {
       const ac = new AbortController();
       controller.current = ac;
 
-      const steps = PHASES[request.depth] ?? PHASES.standard;
+      // Stage 4 only runs when it was asked for, so the stepper must not
+      // promise it. Analysis happens after verification, hence the append.
+      const base = PHASES[request.depth] ?? PHASES.standard;
+      const steps = request.include_analysis
+        ? [
+            ...base,
+            {
+              label: 'Writing the analyst read',
+              hint: 'Thesis, risks and non-obvious signals',
+            },
+          ]
+        : base;
+
       setPhases(steps);
       setPhaseIndex(0);
       setElapsed(0);
@@ -139,7 +151,7 @@ export function useResearch(): UseResearchReturn {
             axiosError.response.data?.detail || `Server error: ${axiosError.response.status}`,
           );
         } else if (axiosError.code === 'ECONNABORTED') {
-          setError('Research timed out. Try \u201cquick\u201d depth, or check your connection.');
+          setError('Research timed out. Try \\u201cquick\\u201d depth, or check your connection.');
         } else if (axiosError.code === 'ERR_NETWORK') {
           setError(
             'Cannot reach the API. Start the backend with: python -m uvicorn app.main:app --reload --port 8000',
