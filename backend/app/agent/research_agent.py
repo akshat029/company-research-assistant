@@ -10,6 +10,7 @@ from langgraph.prebuilt import create_react_agent
 
 from app.config import get_settings
 from app.models import (
+    CompanyAnalysis,
     CompanyBasicInfo,
     CompanyResearchExtraction,
     CompanyResearchResult,
@@ -28,45 +29,84 @@ from app.agent.tools import (
     scrape_website,
     to_iso_date,
 )
-from app.agent.prompts import extraction_prompt, research_system_prompt
+from app.agent.prompts import (
+    analysis_prompt,
+    extraction_prompt,
+    research_system_prompt,
+)
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
-def get_llm(max_tokens: Optional[int] = None):
+def get_llm(
+    max_tokens: Optional[int] = None,
+    model: Optional[str] = None,
+    temperature: Optional[float] = None,
+    extra: Optional[dict] = None,
+):
     """Get the configured LLM.
 
     Provider SDKs are imported lazily so that a missing optional dependency
     (e.g. langchain_openai when running on Groq) cannot break this module.
 
     Args:
-        max_tokens: override the output token budget. The research stage and
-            the extraction stage have very different needs, so they each build
-            their own client.
+        max_tokens: override the output token budget. The stages have very
+            different needs, so they each build their own client.
+        model: override the model id. The tool-calling loop and the reasoning
+            stages want different models entirely - see the GROQ_*_MODEL
+            settings for why.
+        temperature: override sampling. Only the analyst stage raises it.
+        extra: provider-specific model kwargs, e.g. ``reasoning_effort``.
     """
     tokens = max_tokens if max_tokens is not None else settings.LLM_MAX_TOKENS
+    temp = temperature if temperature is not None else settings.LLM_TEMPERATURE
+    # Provider knobs ride through here instead of becoming named parameters,
+    # because not every provider or SDK version accepts them and an unknown
+    # keyword is a hard TypeError at construction time.
+    kwargs = {"model_kwargs": extra} if extra else {}
 
     if settings.LLM_PROVIDER == "groq" and settings.GROQ_API_KEY:
         from langchain_groq import ChatGroq
         return ChatGroq(
             api_key=settings.GROQ_API_KEY,
-            model=settings.GROQ_MODEL,
-            temperature=settings.LLM_TEMPERATURE,
+            model=model or settings.GROQ_MODEL,
+            temperature=temp,
             max_tokens=tokens,
+            **kwargs,
         )
     elif settings.OPENAI_API_KEY:
         from langchain_openai import ChatOpenAI
         return ChatOpenAI(
             api_key=settings.OPENAI_API_KEY,
-            model=settings.OPENAI_MODEL,
-            temperature=settings.LLM_TEMPERATURE,
+            model=model or settings.OPENAI_MODEL,
+            temperature=temp,
             max_tokens=tokens,
+            **kwargs,
         )
     else:
         raise ValueError(
             "No LLM API key configured. Set OPENAI_API_KEY or GROQ_API_KEY in .env"
         )
+
+
+def extraction_model_id() -> Optional[str]:
+    """Model id for stage 2. Falls back to the stage 1 model when unset."""
+    if settings.LLM_PROVIDER == "groq" and settings.GROQ_API_KEY:
+        return settings.GROQ_EXTRACTION_MODEL or settings.GROQ_MODEL
+    return settings.OPENAI_MODEL
+
+
+def analysis_model_id() -> Optional[str]:
+    """Model id for stage 4.
+
+    Split out because the jobs genuinely differ. Stage 1 needs dependable
+    function calling above all else; stage 4 needs reasoning and never touches
+    a tool. Pinning both to one model means losing on one of the two.
+    """
+    if settings.LLM_PROVIDER == "groq" and settings.GROQ_API_KEY:
+        return settings.GROQ_ANALYSIS_MODEL or settings.GROQ_MODEL
+    return settings.OPENAI_ANALYSIS_MODEL or settings.OPENAI_MODEL
 
 
 def get_tavily_client():
@@ -77,7 +117,7 @@ def get_tavily_client():
     return TavilyClient(api_key=settings.TAVILY_API_KEY)
 
 
-# ─── LangChain Tools ──────────────────────────────────────────────────────────
+# ─── LangChain Tools ────────────────────
 
 def build_research_tools(collector: SourceCollector) -> list:
     """Build the tool set for one research run.
@@ -161,7 +201,7 @@ def build_research_tools(collector: SourceCollector) -> list:
     return [web_search, search_news, scrape_url]
 
 
-# ─── Main Research Agent ───────────────────────────────────────────────────
+# ─── Main Research Agent ────────────────────
 
 class CompanyResearchAgent:
     """Orchestrates company research as three stages.
@@ -207,10 +247,20 @@ class CompanyResearchAgent:
             logger.warning(f"Structured output unavailable, using text fallback: {e}")
             self.extractor = None
 
-    # ─── Public API ─────────────────────────────────────
+    # ─── Public API ────────────────────
 
-    def research(self, query: str, depth: str = "standard") -> CompanyResearchResult:
-        """Execute the full research pipeline."""
+    def research(
+        self,
+        query: str,
+        depth: str = "standard",
+        include_analysis: Optional[bool] = None,
+    ) -> CompanyResearchResult:
+        """Execute the full research pipeline.
+
+        Args:
+            include_analysis: run stage 4. None defers to ENABLE_ANALYSIS so
+                that existing callers keep working unchanged.
+        """
         start_time = time.time()
         self.collector.reset()
         self._degraded = False
@@ -230,14 +280,21 @@ class CompanyResearchAgent:
         extraction = self._extract(brief, company_name, website_url)
         result = self._apply_source_truth(extraction, company_name, website_url)
 
+        run_analysis = (
+            settings.ENABLE_ANALYSIS if include_analysis is None else include_analysis
+        )
+        if run_analysis:
+            result.analysis = self._analyze(result, company_name)
+
         elapsed = time.time() - start_time
         logger.info(
             f"Research completed in {elapsed:.1f}s "
-            f"(confidence={result.research_confidence})"
+            f"(confidence={result.research_confidence}, "
+            f"analysis={'yes' if result.analysis else 'no'})"
         )
         return result
 
-    # ─── Stage 1: gather ──────────────────────────────────
+    # ─── Stage 1: gather ────────────────────
 
     def _gather(self, company_name: str, website_url: str, depth: str) -> str:
         """Run the tool-using agent and return a plain-text research brief."""
@@ -328,7 +385,7 @@ Do NOT output JSON. A separate step handles formatting.
             lines.append("")
         return "\n".join(lines)
 
-    # ─── Stage 2: extract ────────────────────────────────
+    # ─── Stage 2: extract ────────────────────
 
     def _extract(
         self, brief: str, company_name: str, website_url: str
@@ -549,3 +606,215 @@ Do NOT output JSON. A separate step handles formatting.
         if domains >= 3 and populated >= 3:
             return "medium"
         return "low"
+
+    # ─── Stage 4: analyze the verified result ────────────────────
+
+    def _analyze(
+        self, result: CompanyResearchResult, company_name: str
+    ) -> Optional[CompanyAnalysis]:
+        """Reason over the verified result and return a consultant-style read.
+
+        Runs last, deliberately. By this point every fact has been transcribed
+        from a page that was actually retrieved and every link has been checked,
+        so the analyst cannot launder an invented fact through an opinion. It is
+        shown the clean result and the numbered evidence list, and nothing else:
+        not the raw brief, not the tool transcript, and explicitly not its own
+        recollection of the company.
+
+        Failure here is never fatal. Analysis is an enhancement, and a run that
+        produced good verified facts must not be discarded because one extra
+        call timed out or hit a rate limit.
+        """
+        if self._degraded:
+            logger.info("Skipping analysis: extraction ran in degraded mode")
+            return None
+
+        evidence = self._evidence_list(result)
+        if not evidence:
+            logger.info("Skipping analysis: no verified sources to reason from")
+            return None
+
+        model_id = analysis_model_id()
+        try:
+            analyst = self._build_analyst(model_id)
+        except Exception as e:
+            logger.warning(f"Analyst unavailable, skipping analysis: {e}")
+            return None
+
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        payload = (
+            f"Company: {company_name}\n\n"
+            f"=== VERIFIED FACT SHEET ===\n{self._fact_sheet(result)}\n\n"
+            f"=== EVIDENCE (cite these index numbers) ===\n{evidence}"
+        )
+
+        try:
+            analysis = analyst.invoke(
+                [
+                    SystemMessage(content=analysis_prompt(today)),
+                    HumanMessage(content=payload),
+                ]
+            )
+        except Exception as e:
+            logger.error(f"Analysis failed ({model_id}): {e}")
+            return None
+
+        if not isinstance(analysis, CompanyAnalysis):
+            logger.warning("Analyst returned an unexpected type; dropping analysis")
+            return None
+
+        analysis.generated_by = model_id
+        return self._sanitize_analysis(analysis, len(result.source_details or []))
+
+    def _build_analyst(self, model_id: Optional[str]):
+        """Structured-output client for stage 4.
+
+        ``reasoning_effort`` is understood only by gpt-oss style models and by
+        recent langchain-groq releases. An unsupported keyword raises at
+        construction time, so it gets its own attempt and a clean retry without
+        it rather than being allowed to disable the whole stage.
+        """
+        base = dict(
+            max_tokens=settings.ANALYSIS_MAX_TOKENS,
+            model=model_id,
+            temperature=settings.ANALYSIS_TEMPERATURE,
+        )
+        effort = (settings.ANALYSIS_REASONING_EFFORT or "").strip().lower()
+
+        if effort in ("low", "medium", "high"):
+            try:
+                llm = get_llm(**base, extra={"reasoning_effort": effort})
+                return llm.with_structured_output(CompanyAnalysis)
+            except Exception as e:
+                logger.info(f"reasoning_effort rejected, retrying without it: {e}")
+
+        return get_llm(**base).with_structured_output(CompanyAnalysis)
+
+    def _evidence_list(self, result: CompanyResearchResult) -> str:
+        """Numbered source list. These indices are what analysis points cite."""
+        details = result.source_details or []
+        if not details:
+            return ""
+
+        rows = []
+        for i, s in enumerate(details[: settings.ANALYSIS_MAX_EVIDENCE]):
+            title = s.title or s.domain or s.url
+            rows.append(
+                f"[{i}] {s.published_date or 'undated'} | {s.domain or '?'} | {title}"
+            )
+        return "\n".join(rows)
+
+    def _fact_sheet(self, result: CompanyResearchResult) -> str:
+        """Compact text rendering of the verified result.
+
+        Sending the raw JSON would spend tokens on nulls and punctuation. Empty
+        fields are still worth stating: "not found" is information the analyst
+        can legitimately turn into an ``unknowns`` entry, whereas an omitted key
+        just looks like it was never considered.
+        """
+        lines: List[str] = []
+
+        def add(label: str, value) -> None:
+            lines.append(f"{label}: {value if value else 'not found'}")
+
+        info = result.basic_info
+        if info:
+            add("Name", info.name)
+            add("Website", info.website)
+            add("Industry", info.industry)
+            add("Founded", info.founded)
+            add("Headquarters", info.headquarters)
+            add("Size", info.company_size)
+            add("Type", info.company_type)
+            add("Description", info.description)
+
+        add("Market position", result.market_position)
+        add("Target market", result.target_market)
+        add("Hiring status", result.hiring_status)
+        add("Open roles", result.open_roles_summary)
+        add("Culture", result.culture_and_values)
+
+        if result.products_and_services:
+            lines.append("Products and services:")
+            for p in result.products_and_services[:10]:
+                lines.append(f"  - {p.name}: {p.description or 'no description'}")
+
+        if result.leadership:
+            lines.append("Leadership:")
+            for m in result.leadership[:10]:
+                lines.append(f"  - {m.name}, {m.title}")
+
+        fin = result.financial_info
+        if fin:
+            lines.append("Financials:")
+            lines.append(f"  total funding: {fin.total_funding or 'not found'}")
+            lines.append(f"  last valuation: {fin.last_valuation or 'not found'}")
+            lines.append(f"  revenue: {fin.revenue or 'not found'}")
+            lines.append(f"  ipo status: {fin.ipo_status or 'not found'}")
+            for r in (fin.funding_rounds or [])[:8]:
+                lines.append(
+                    f"  round: {r.round_type or '?'} | "
+                    f"{r.amount or '?'} | {r.date or '?'}"
+                )
+
+        if result.competitors:
+            lines.append(
+                "Competitors: " + ", ".join(c.name for c in result.competitors[:10])
+            )
+
+        if result.tech_stack:
+            for t in result.tech_stack[:6]:
+                lines.append(f"Tech ({t.category}): {', '.join(t.technologies[:10])}")
+
+        if result.recent_news:
+            lines.append("Recent news:")
+            for n in result.recent_news[:10]:
+                flag = "verified" if n.verified else "unverified"
+                lines.append(f"  - {n.date or 'undated'} [{flag}] {n.title}")
+
+        swot = result.swot_analysis
+        if swot:
+            for label, items in (
+                ("Strengths", swot.strengths),
+                ("Weaknesses", swot.weaknesses),
+                ("Opportunities", swot.opportunities),
+                ("Threats", swot.threats),
+            ):
+                if items:
+                    lines.append(f"{label}: {'; '.join(items[:6])}")
+
+        add("Data freshness", result.data_freshness)
+        add("Evidence confidence", result.research_confidence)
+        return "\n".join(lines)
+
+    def _sanitize_analysis(
+        self, analysis: CompanyAnalysis, source_count: int
+    ) -> CompanyAnalysis:
+        """Drop citations pointing at sources that do not exist.
+
+        The analyst cites by index. A model under output pressure will
+        occasionally cite [7] when only five sources were supplied, and an index
+        resolving to nothing would render as a broken reference - the same class
+        of defect as the unverified links this project set out to eliminate.
+        """
+
+        def clean(indices) -> List[int]:
+            kept: List[int] = []
+            for i in indices or []:
+                if isinstance(i, int) and 0 <= i < source_count and i not in kept:
+                    kept.append(i)
+            return kept
+
+        for group in (
+            analysis.why_now,
+            analysis.competitive_position,
+            analysis.moat,
+            analysis.non_obvious,
+        ):
+            for point in group:
+                point.derived_from = clean(point.derived_from)
+
+        for risk in analysis.risks:
+            risk.derived_from = clean(risk.derived_from)
+
+        return analysis
