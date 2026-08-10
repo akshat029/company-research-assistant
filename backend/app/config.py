@@ -1,4 +1,3 @@
-import os
 from pydantic_settings import BaseSettings
 from functools import lru_cache
 
@@ -6,7 +5,7 @@ from functools import lru_cache
 class Settings(BaseSettings):
     # App
     APP_NAME: str = "Company Research Assistant"
-    APP_VERSION: str = "1.0.0"
+    APP_VERSION: str = "1.1.0"
     DEBUG: bool = False
 
     # API Keys
@@ -25,11 +24,24 @@ class Settings(BaseSettings):
     LLM_MAX_TOKENS: int = 2048
     # Output budget for the extraction stage. This call carries no tool history,
     # so it can afford a larger budget — and it needs one, because the full
-    # CompanyResearchResult schema does not fit in 2048 tokens.
+    # result schema does not fit in 2048 tokens.
     EXTRACTION_MAX_TOKENS: int = 4096
 
     # Research Settings
+    # How many results Tavily returns. These all feed the source collector, so
+    # raising it improves provenance without costing prompt tokens.
     MAX_SEARCH_RESULTS: int = 8
+    # How many of those results are actually shown to the model. This is the
+    # only one of the two that costs tokens — lower it first on HTTP 413.
+    SEARCH_RESULTS_IN_PROMPT: int = 4
+    # Characters of snippet per shown result.
+    SEARCH_SNIPPET_CHARS: int = 350
+    # Recency window for the news tool, in days.
+    NEWS_RECENCY_DAYS: int = 180
+    # Upper bound on tracked sources per run.
+    MAX_SOURCES: int = 25
+    # Character budget for a single scraped page.
+    MAX_SCRAPE_CHARS: int = 4000
     MAX_SCRAPE_PAGES: int = 3
     RESEARCH_TIMEOUT_SECONDS: int = 120
     # Max ReAct turns before LangGraph aborts. Each turn resends the full
@@ -46,6 +58,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "ignore"
 
 
 @lru_cache()

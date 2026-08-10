@@ -1,5 +1,5 @@
-from pydantic import BaseModel, Field, HttpUrl
-from typing import Optional, List, Dict, Any
+from pydantic import BaseModel, Field
+from typing import Optional, List
 from enum import Enum
 
 
@@ -57,6 +57,12 @@ class NewsItem(BaseModel):
     date: Optional[str] = None
     source: Optional[str] = None
     sentiment: Optional[str] = None  # positive | neutral | negative
+    # Server-controlled. The extraction model must leave this alone; the agent
+    # overwrites it after checking the URL against the pages actually fetched.
+    verified: Optional[bool] = Field(
+        default=None,
+        description="Leave null. Set by the server after source verification.",
+    )
 
 
 class FundingRound(BaseModel):
@@ -95,47 +101,65 @@ class SocialMedia(BaseModel):
     github: Optional[str] = None
 
 
-class CompanyResearchResult(BaseModel):
-    # Core
+class SwotAnalysis(BaseModel):
+    """Four explicit lists instead of ``Dict[str, List[str]]``.
+
+    An open-ended mapping compiles to a JSON Schema with no fixed properties,
+    which Groq rejects for structured output. That rejection is what triggered
+    the "Structured output unavailable, using text fallback" log line and sent
+    every request down the fragile hand-written-JSON path. The wire format is
+    unchanged, so the frontend needs no migration.
+    """
+
+    strengths: List[str] = Field(default_factory=list)
+    weaknesses: List[str] = Field(default_factory=list)
+    opportunities: List[str] = Field(default_factory=list)
+    threats: List[str] = Field(default_factory=list)
+
+
+class SourceRef(BaseModel):
+    """A page the agent actually retrieved. Built by the server, never by the LLM."""
+
+    url: str
+    title: Optional[str] = None
+    domain: Optional[str] = None
+    published_date: Optional[str] = None
+    kind: Optional[str] = None  # web | news | scrape
+
+
+class CompanyResearchExtraction(BaseModel):
+    """The schema the LLM is asked to fill.
+
+    Deliberately excludes sources, timestamps and confidence. Those are facts
+    about the *research run*, not about the company, and the server knows them
+    exactly. Leaving them out removes the model's opportunity to invent them
+    and shrinks the schema that has to survive the token budget.
+    """
+
     basic_info: Optional[CompanyBasicInfo] = None
-    
-    # Products & Services
     products_and_services: Optional[List[ProductService]] = None
-    
-    # People
     leadership: Optional[List[LeadershipMember]] = None
-    
-    # News
     recent_news: Optional[List[NewsItem]] = None
-    
-    # Financial
     financial_info: Optional[FinancialInfo] = None
-    
-    # Market
     competitors: Optional[List[Competitor]] = None
     market_position: Optional[str] = None
     target_market: Optional[str] = None
-    
-    # Tech
     tech_stack: Optional[List[TechStackItem]] = None
-    
-    # Social
     social_media: Optional[SocialMedia] = None
-    
-    # Culture
     culture_and_values: Optional[str] = None
-    
-    # Jobs
     hiring_status: Optional[str] = None
     open_roles_summary: Optional[str] = None
-    
-    # Analysis
-    swot_analysis: Optional[Dict[str, List[str]]] = None  # strengths, weaknesses, opportunities, threats
+    swot_analysis: Optional[SwotAnalysis] = None
     ai_summary: Optional[str] = None
+
+
+class CompanyResearchResult(CompanyResearchExtraction):
+    """What the API returns: the extraction plus server-computed provenance."""
+
     research_confidence: Optional[str] = None  # high | medium | low
-    
-    # Meta
     sources: Optional[List[str]] = None
+    source_details: Optional[List[SourceRef]] = None
+    data_freshness: Optional[str] = None
     researched_at: Optional[str] = None
 
 
