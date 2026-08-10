@@ -37,6 +37,12 @@ export interface NewsItem {
   date?: string;
   source?: string;
   sentiment?: 'positive' | 'neutral' | 'negative';
+  /**
+   * Set by the backend, never by the model. `true` means the link was actually
+   * returned by the search index; `false` means the model asserted the story
+   * but no retrieved source backs it, so the UI must not render it as a link.
+   */
+  verified?: boolean;
 }
 
 export interface FundingRound {
@@ -82,6 +88,15 @@ export interface SwotAnalysis {
   threats: string[];
 }
 
+/** A source the backend actually retrieved, with its real publication date. */
+export interface SourceRef {
+  url: string;
+  title?: string;
+  domain?: string;
+  published_date?: string;
+  kind?: string;
+}
+
 export interface CompanyResearchResult {
   basic_info?: CompanyBasicInfo;
   products_and_services?: ProductService[];
@@ -100,6 +115,10 @@ export interface CompanyResearchResult {
   ai_summary?: string;
   research_confidence?: 'high' | 'medium' | 'low';
   sources?: string[];
+  /** Richer view of `sources`, including titles and real publication dates. */
+  source_details?: SourceRef[];
+  /** Human-readable age of the freshest retrieved source, e.g. "12 days old". */
+  data_freshness?: string;
   researched_at?: string;
 }
 
@@ -110,6 +129,13 @@ export interface ResearchResponse {
   error?: string;
   duration_seconds?: number;
   cached: boolean;
+}
+
+export interface HealthResponse {
+  status: string;
+  version: string;
+  llm_provider: string;
+  cache_enabled: boolean;
 }
 
 export type DepthOption = 'quick' | 'standard' | 'deep';

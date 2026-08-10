@@ -3,113 +3,160 @@
 @tailwind utilities;
 
 @layer base {
+  :root {
+    color-scheme: dark;
+  }
+
   * {
-    box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
   }
 
   html {
     scroll-behavior: smooth;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
   }
 
   body {
-    @apply bg-gray-50 text-gray-900 font-sans;
-    min-height: 100vh;
+    @apply bg-ink-950 text-slate-300 antialiased;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11', 'ss01';
+    text-rendering: optimizeLegibility;
   }
 
-  #root {
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
+  ::selection {
+    @apply bg-accent-violet/30 text-white;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply rounded-full bg-white/10;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-white/20;
+    background-clip: padding-box;
+  }
+
+  :focus-visible {
+    @apply outline-none ring-2 ring-accent-violet/70 ring-offset-2 ring-offset-ink-950;
   }
 }
 
 @layer components {
-  .card {
-    @apply bg-white rounded-xl shadow-card border border-surface-200 p-6;
+  /* Frosted panel used by every card in the app. */
+  .glass {
+    @apply border border-white/[0.07] bg-white/[0.025] backdrop-blur-xl;
   }
 
-  .card-sm {
-    @apply bg-white rounded-lg shadow-soft border border-surface-200 p-4;
+  .glass-strong {
+    @apply border border-white/[0.10] bg-white/[0.05] backdrop-blur-2xl;
   }
 
-  .badge {
-    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+  /* Gradient hairline that reads as a premium divider. */
+  .hairline {
+    background: linear-gradient(
+      90deg,
+      transparent,
+      rgba(255, 255, 255, 0.12) 20%,
+      rgba(255, 255, 255, 0.12) 80%,
+      transparent
+    );
   }
 
-  .badge-blue {
-    @apply badge bg-blue-100 text-blue-800;
+  .text-gradient {
+    @apply bg-clip-text text-transparent;
+    background-image: linear-gradient(100deg, #ffffff 0%, #c7d2fe 45%, #a78bfa 100%);
   }
 
-  .badge-green {
-    @apply badge bg-green-100 text-green-800;
+  /* Animated conic border for the hero search field. */
+  .ring-conic::before {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    border-radius: inherit;
+    padding: 1px;
+    background: conic-gradient(
+      from var(--angle, 0deg),
+      transparent 0%,
+      rgba(34, 211, 238, 0.55) 12%,
+      rgba(167, 139, 250, 0.75) 26%,
+      transparent 42%
+    );
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    opacity: 0;
+    transition: opacity 0.35s ease;
+    pointer-events: none;
   }
 
-  .badge-orange {
-    @apply badge bg-orange-100 text-orange-800;
+  .ring-conic:focus-within::before {
+    opacity: 1;
+    animation: spin-angle 4s linear infinite;
   }
 
-  .badge-red {
-    @apply badge bg-red-100 text-red-800;
+  .skeleton {
+    @apply relative overflow-hidden rounded-lg bg-white/[0.05];
   }
 
-  .badge-gray {
-    @apply badge bg-gray-100 text-gray-700;
-  }
-
-  .section-title {
-    @apply text-sm font-semibold text-gray-500 uppercase tracking-wider mb-4;
-  }
-
-  .shimmer {
-    background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+  .skeleton::after {
+    content: '';
+    @apply absolute inset-0;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.07), transparent);
+    animation: shimmer 1.8s linear infinite;
     background-size: 200% 100%;
-    animation: shimmer 1.5s infinite;
   }
 }
 
-/* Custom scrollbar */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  .text-pretty {
+    text-wrap: pretty;
+  }
+
+  /* Fades the bottom of long scroll areas instead of a hard cut. */
+  .mask-fade-b {
+    -webkit-mask-image: linear-gradient(to bottom, #000 78%, transparent 100%);
+    mask-image: linear-gradient(to bottom, #000 78%, transparent 100%);
+  }
+
+  .grid-bg {
+    background-image:
+      linear-gradient(to right, rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+    background-size: 56px 56px;
+  }
 }
 
-::-webkit-scrollbar-track {
-  background: #f1f1f1;
-  border-radius: 4px;
+@property --angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
 }
 
-::-webkit-scrollbar-thumb {
-  background: #c7c7c7;
-  border-radius: 4px;
+@keyframes spin-angle {
+  to {
+    --angle: 360deg;
+  }
 }
 
-::-webkit-scrollbar-thumb:hover {
-  background: #a8a8a8;
-}
-
-/* Animations */
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-@keyframes slideUp {
-  from { opacity: 0; transform: translateY(20px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-@keyframes shimmer {
-  0% { background-position: -200% 0; }
-  100% { background-position: 200% 0; }
-}
-
-@keyframes spin-slow {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-
-.animate-spin-slow {
-  animation: spin-slow 3s linear infinite;
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
 }
