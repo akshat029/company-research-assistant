@@ -20,7 +20,7 @@ from bs4 import BeautifulSoup
 logger = logging.getLogger(__name__)
 
 
-# ─── URL hygiene ──────────────────────────────────────────────────────────────
+# ─── URL hygiene ────────────────────
 
 _TRACKING_PREFIXES = ("utm_", "mc_", "pk_", "hsa_")
 _TRACKING_KEYS = {
@@ -160,7 +160,7 @@ def domain_of(url: Optional[str]) -> Optional[str]:
     return host[4:] if host.startswith("www.") else host
 
 
-# ─── Date helpers ─────────────────────────────────────────────────────────────
+# ─── Date helpers ────────────────────
 
 _DATE_FORMATS = (
     "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S",
@@ -222,7 +222,7 @@ def humanize_age(days: Optional[int]) -> Optional[str]:
     return f"{years:g} year{'s' if years != 1 else ''} old"
 
 
-# ─── Title matching ───────────────────────────────────────────────────────────
+# ─── Title matching ────────────────────
 
 _STOPWORDS = {
     "a", "an", "and", "as", "at", "be", "by", "for", "from", "in", "is", "it",
@@ -239,7 +239,7 @@ def _title_tokens(title: Optional[str]) -> set:
     return {t for t in _title_key(title).split() if t not in _STOPWORDS and len(t) > 2}
 
 
-# ─── Source collector ─────────────────────────────────────────────────────────
+# ─── Source collector ────────────────────
 
 def _clean_snippet(text: Optional[str], limit: int = 320) -> Optional[str]:
     """Compact a result snippet for the offline fallback brief."""
@@ -414,7 +414,7 @@ class SourceCollector:
         return len(self._order)
 
 
-# ─── Search result formatting ─────────────────────────────────────────────────
+# ─── Search result formatting ────────────────────
 
 def format_search_results(
     results: Optional[List[Dict[str, Any]]],
@@ -480,7 +480,7 @@ def format_search_results(
     return f"{header}\n{body}".strip()
 
 
-# ─── Query planning ───────────────────────────────────────────────────────────
+# ─── Query planning ────────────────────
 
 def build_search_queries(
     company_name: str,
@@ -493,6 +493,12 @@ def build_search_queries(
     Previously this existed but was never called, and it hardcoded "2024 2025",
     which actively steered the agent toward stale articles. The year is now
     derived from the clock, and ``website_url`` is finally used.
+
+    Two families of query are produced. The descriptive ones establish what the
+    company says it is. The signal ones establish what is actually happening to
+    it — hiring, pricing, departures, complaints. Only the second family gives
+    the analyst stage anything to reason from; without them the analysis can do
+    no better than paraphrase the company's own marketing.
     """
     name = (company_name or "").strip()
     if not name:
@@ -514,6 +520,15 @@ def build_search_queries(
     if domain:
         queries.insert(1, f"{name} {domain} about company")
 
+    # Second-order signals, ordered by how often they actually pay off.
+    signals = [
+        f"{name} hiring job openings engineering roles {year}",
+        f"{name} executive departure steps down CTO CFO {year}",
+        f"{name} pricing change price increase new plans",
+        f"{name} layoffs restructuring headcount reduction",
+        f"{name} customer complaints churn negative reviews",
+    ]
+
     if depth == "deep":
         queries.extend([
             f"{name} employees headcount company size {year}",
@@ -522,13 +537,17 @@ def build_search_queries(
             f"{name} revenue annual recurring revenue {year}",
             f"{name} risks challenges criticism lawsuit",
         ])
+        queries.extend(signals)
     elif depth == "quick":
+        # Quick runs stay descriptive: there is no budget to chase signals.
         queries = queries[:4]
+    else:
+        queries.extend(signals[:3])
 
     return queries
 
 
-# ─── Scraping ─────────────────────────────────────────────────────────────────
+# ─── Scraping ────────────────────
 
 _STRIP_TAGS = (
     "script", "style", "nav", "footer", "header", "aside",
