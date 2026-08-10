@@ -1,11 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
-import { ArrowRight, Command, Gauge, Loader2, Search, Sparkles, Zap } from 'lucide-react';
+import {
+  ArrowRight,
+  Command,
+  Gauge,
+  Lightbulb,
+  Loader2,
+  Search,
+  Sparkles,
+  Zap,
+} from 'lucide-react';
 import { cn } from '../lib/utils';
 import type { DepthOption } from '../types';
 
 interface Props {
-  onSearch: (query: string, depth: DepthOption) => void;
+  onSearch: (query: string, depth: DepthOption, includeAnalysis: boolean) => void;
   loading: boolean;
 }
 
@@ -26,6 +35,10 @@ const EXAMPLES = ['Stripe', 'notion.so', 'Anthropic', 'Figma', 'Vercel'];
 export function SearchBar({ onSearch, loading }: Props) {
   const [query, setQuery] = useState('');
   const [depth, setDepth] = useState<DepthOption>('standard');
+  // On by default: the analyst read is the point of the tool. It is a toggle
+  // rather than always-on because it costs an extra model call, which matters
+  // on a free tier with a per-minute token budget.
+  const [analysis, setAnalysis] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Cmd/Ctrl+K focuses the field, the way every modern tool behaves.
@@ -45,7 +58,7 @@ export function SearchBar({ onSearch, loading }: Props) {
     e?.preventDefault();
     const trimmed = query.trim();
     if (!trimmed || loading) return;
-    onSearch(trimmed, depth);
+    onSearch(trimmed, depth, analysis);
   };
 
   return (
@@ -97,7 +110,11 @@ export function SearchBar({ onSearch, loading }: Props) {
       </form>
 
       <div className="mt-4 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Research depth">
+        <div
+          className="flex flex-wrap items-center gap-1.5"
+          role="group"
+          aria-label="Research depth"
+        >
           {DEPTHS.map((d) => {
             const Icon = d.icon;
             const active = depth === d.id;
@@ -108,7 +125,7 @@ export function SearchBar({ onSearch, loading }: Props) {
                 onClick={() => setDepth(d.id)}
                 disabled={loading}
                 aria-pressed={active}
-                title={`${d.blurb} \u00b7 ${d.time}`}
+                title={`${d.blurb} \\u00b7 ${d.time}`}
                 className={cn(
                   'group relative inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-medium transition-all disabled:opacity-50',
                   active
@@ -122,6 +139,31 @@ export function SearchBar({ onSearch, loading }: Props) {
               </button>
             );
           })}
+
+          <span className="mx-1 hidden h-4 w-px bg-white/10 sm:block" />
+
+          <button
+            type="button"
+            onClick={() => setAnalysis((v) => !v)}
+            disabled={loading}
+            aria-pressed={analysis}
+            title="Adds a consultant-style read on top of the facts: thesis, competitive position, ranked risks and non-obvious signals. Costs one extra model call."
+            className={cn(
+              'inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-medium transition-all disabled:opacity-50',
+              analysis
+                ? 'bg-accent-violet/[0.14] text-accent-violet ring-1 ring-inset ring-accent-violet/30'
+                : 'text-slate-400 hover:bg-white/[0.04] hover:text-slate-200',
+            )}
+          >
+            <Lightbulb className="h-3.5 w-3.5" />
+            Analysis
+            <span
+              className={cn(
+                'h-1.5 w-1.5 rounded-full transition-colors',
+                analysis ? 'bg-accent-violet' : 'bg-slate-600',
+              )}
+            />
+          </button>
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5">
@@ -133,7 +175,7 @@ export function SearchBar({ onSearch, loading }: Props) {
               disabled={loading}
               onClick={() => {
                 setQuery(ex);
-                onSearch(ex, depth);
+                onSearch(ex, depth, analysis);
               }}
               className="rounded-lg border border-white/[0.07] bg-white/[0.02] px-2.5 py-1 text-xs text-slate-400 transition-colors hover:border-white/15 hover:text-slate-100 disabled:opacity-50"
             >
