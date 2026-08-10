@@ -13,12 +13,17 @@ class ResearchStatus(str, Enum):
 class ResearchRequest(BaseModel):
     query: str = Field(..., description="Company name or website URL", min_length=1, max_length=500)
     depth: str = Field(default="standard", description="Research depth: quick | standard | deep")
+    include_analysis: bool = Field(
+        default=True,
+        description="Run the analyst stage. Costs one extra LLM call per request.",
+    )
 
     class Config:
         json_schema_extra = {
             "example": {
                 "query": "OpenAI",
-                "depth": "standard"
+                "depth": "standard",
+                "include_analysis": True
             }
         }
 
@@ -127,6 +132,47 @@ class SourceRef(BaseModel):
     kind: Optional[str] = None  # web | news | scrape
 
 
+class AnalysisPoint(BaseModel):
+    """One analytical claim, tied back to the evidence that supports it."""
+
+    point: str
+    rationale: Optional[str] = None
+    # Indices into the result's ``source_details`` list. The server drops any
+    # index that is out of range, so a fabricated citation cannot survive.
+    derived_from: List[int] = Field(default_factory=list)
+    confidence: Optional[str] = None  # high | medium | low
+
+
+class RiskItem(BaseModel):
+    risk: str
+    severity: Optional[str] = None  # high | medium | low
+    rationale: Optional[str] = None
+    derived_from: List[int] = Field(default_factory=list)
+
+
+class CompanyAnalysis(BaseModel):
+    """Stage 4 output: inference, clearly fenced off from transcribed fact.
+
+    Everything in ``CompanyResearchExtraction`` is copied from retrieved pages.
+    Everything here is judgement derived from it. Keeping them in separate
+    models is what lets the UI draw an honest line between the two, instead of
+    blending sourced facts and opinion into one indistinguishable page.
+    """
+
+    thesis: Optional[str] = None
+    why_now: List[AnalysisPoint] = Field(default_factory=list)
+    competitive_position: List[AnalysisPoint] = Field(default_factory=list)
+    moat: List[AnalysisPoint] = Field(default_factory=list)
+    risks: List[RiskItem] = Field(default_factory=list)
+    non_obvious: List[AnalysisPoint] = Field(default_factory=list)
+    questions_to_ask: List[str] = Field(default_factory=list)
+    unknowns: List[str] = Field(default_factory=list)
+    analyst_confidence: Optional[str] = None  # high | medium | low
+    # Named ``generated_by`` rather than ``model_*``: Pydantic v2 reserves the
+    # ``model_`` prefix and warns on fields that use it.
+    generated_by: Optional[str] = None
+
+
 class CompanyResearchExtraction(BaseModel):
     """The schema the LLM is asked to fill.
 
@@ -161,6 +207,7 @@ class CompanyResearchResult(CompanyResearchExtraction):
     source_details: Optional[List[SourceRef]] = None
     data_freshness: Optional[str] = None
     researched_at: Optional[str] = None
+    analysis: Optional[CompanyAnalysis] = None
 
 
 class ResearchResponse(BaseModel):
