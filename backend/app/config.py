@@ -5,7 +5,7 @@ from functools import lru_cache
 class Settings(BaseSettings):
     # App
     APP_NAME: str = "Company Research Assistant"
-    APP_VERSION: str = "1.1.0"
+    APP_VERSION: str = "1.2.0"
     DEBUG: bool = False
 
     # API Keys
@@ -16,8 +16,19 @@ class Settings(BaseSettings):
     # LLM Settings
     LLM_PROVIDER: str = "openai"  # openai | groq
     OPENAI_MODEL: str = "gpt-4o"
+    # Stage 1 drives the ReAct tool loop, where reliable function calling matters
+    # far more than raw reasoning. llama-3.3-70b is the proven choice for that.
     GROQ_MODEL: str = "llama-3.3-70b-versatile"
+    # Stages 2 and 4 carry no tool history and reason over text that has already
+    # been retrieved, so they can afford a stronger model. Blank = use GROQ_MODEL.
+    GROQ_EXTRACTION_MODEL: str = "openai/gpt-oss-120b"
+    GROQ_ANALYSIS_MODEL: str = "openai/gpt-oss-120b"
+    # Blank = use OPENAI_MODEL.
+    OPENAI_ANALYSIS_MODEL: str = ""
     LLM_TEMPERATURE: float = 0.0
+    # The analyst stage is the one place a little sampling helps: it is asked for
+    # judgement, not transcription. Everything else stays deterministic.
+    ANALYSIS_TEMPERATURE: float = 0.3
     # Output budget for the research stage. Reserved output tokens count
     # against Groq's tokens-per-minute quota (free tier: 12,000 TPM), and the
     # research stage only needs to write a plain-text brief.
@@ -26,6 +37,17 @@ class Settings(BaseSettings):
     # so it can afford a larger budget — and it needs one, because the full
     # result schema does not fit in 2048 tokens.
     EXTRACTION_MAX_TOKENS: int = 4096
+    # Output budget for the analyst stage.
+    ANALYSIS_MAX_TOKENS: int = 4096
+
+    # Analysis (stage 4)
+    # Master switch. Individual requests can still opt out via the API.
+    ENABLE_ANALYSIS: bool = True
+    # gpt-oss models accept low | medium | high. Ignored by non-reasoning models.
+    ANALYSIS_REASONING_EFFORT: str = "medium"
+    # How many verified sources the analyst is shown. Each one costs tokens, and
+    # past ~15 the marginal source stops changing the conclusions.
+    ANALYSIS_MAX_EVIDENCE: int = 14
 
     # Research Settings
     # How many results Tavily returns. These all feed the source collector, so

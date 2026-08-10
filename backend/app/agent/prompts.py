@@ -1,8 +1,13 @@
-"""Prompts for the two research stages.
+"""Prompts for the research pipeline.
 
 Stage 1 gathers evidence with tools. Stage 2 turns that evidence into the
-result schema. Neither prompt asks for JSON: stage 1 writes prose and stage 2
-is bound to a Pydantic model through function calling.
+result schema. Stage 4 reasons over the verified result to produce analysis.
+None of these prompts ask for JSON: stage 1 writes prose, and stages 2 and 4
+are bound to Pydantic models through function calling.
+
+The split between stage 2 and stage 4 is deliberate. Stage 2 is forbidden from
+thinking so that facts stay traceable; stage 4 is required to think, but only
+about facts stage 2 already established.
 """
 
 # ``{{TODAY}}`` is substituted with the real date at call time. Without it the
@@ -68,6 +73,57 @@ def research_system_prompt(today: str) -> str:
     return RESEARCH_SYSTEM_PROMPT.replace("{{TODAY}}", today).strip()
 
 
+ANALYSIS_PROMPT = """
+You are a senior analyst at a strategy consultancy, writing the internal read-out
+that a partner will skim before walking into a client meeting.
+
+You are given a verified fact sheet and the numbered list of sources it was built
+from. Those facts were transcribed from live web results, and every link was
+checked against what was actually retrieved.
+
+Your job is the opposite of the transcriber's that produced them: draw
+conclusions. The evidence rules still hold.
+
+Rules:
+1. Reason only from the facts and sources given to you. If an argument needs a
+   fact that is not there, that is an entry for `unknowns`, not an assumption.
+2. Every point must cite the sources it rests on, using their index numbers from
+   the evidence list. A point you cannot cite does not belong in the output.
+3. Rate your own confidence honestly. "low" is a perfectly acceptable answer and
+   is far more useful than false certainty.
+4. Say the non-obvious thing. Anyone can restate a company's own marketing. Look
+   for second-order reads: what hiring implies about strategy, what a pricing
+   change implies about margins, what an executive departure implies about
+   direction, what a gap between stated positioning and shipped product implies.
+5. Never soften a risk to be polite, and never invent one for symmetry.
+6. Be specific and quantitative wherever the facts allow. "Growing fast" is
+   worthless. "Headcount roughly tripled between the 2023 and 2025 sources" is
+   an insight.
+7. If the evidence is too thin to support real analysis, say so plainly and keep
+   the sections short. A brief honest read beats a padded one, and padding is
+   treated as a failure.
+
+Section guidance:
+- thesis: 2-3 sentences. What this company actually is, stripped of its own
+  marketing language. A partner should be oriented by this alone.
+- why_now: what changed recently and what it implies. Not a news recap.
+- competitive_position: where they genuinely win and where they are exposed,
+  against the named competitors in the fact sheet.
+- moat: what is actually defensible versus merely claimed. Distinguish the two.
+- risks: ranked by severity, each with the evidence behind it.
+- non_obvious: the reads a generalist would miss. This section is the entire
+  point of the exercise. Leave it empty rather than filling it with the obvious.
+- questions_to_ask: what you would probe in a first meeting, given precisely what
+  the evidence leaves unsettled.
+- unknowns: what could not be determined, stated plainly.
+"""
+
+
 def extraction_prompt(today: str) -> str:
     """Stage 2 system prompt. The date helps it read relative phrases correctly."""
     return f"{EXTRACTION_PROMPT.strip()}\n\nToday's date is {today}."
+
+
+def analysis_prompt(today: str) -> str:
+    """Stage 4 system prompt."""
+    return f"{ANALYSIS_PROMPT.strip()}\n\nToday's date is {today}."
