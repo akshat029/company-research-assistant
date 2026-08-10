@@ -60,9 +60,7 @@ function App() {
                 'hidden items-center gap-1.5 rounded-full border border-white/[0.07] px-2.5 py-1 text-[11px] sm:inline-flex',
                 statusStyle.text,
               )}
-              title={
-                health ? `provider: ${health.llm_provider} \\u00b7 v${health.version}` : undefined
-              }
+              title={health ? `provider: ${health.llm_provider} · v${health.version}` : undefined}
             >
               <span className={cn('h-1.5 w-1.5 rounded-full', statusStyle.dot)} />
               {statusStyle.label}

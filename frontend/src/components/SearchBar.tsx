@@ -125,7 +125,7 @@ export function SearchBar({ onSearch, loading }: Props) {
                 onClick={() => setDepth(d.id)}
                 disabled={loading}
                 aria-pressed={active}
-                title={`${d.blurb} \\u00b7 ${d.time}`}
+                title={`${d.blurb} · ${d.time}`}
                 className={cn(
                   'group relative inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-medium transition-all disabled:opacity-50',
                   active
