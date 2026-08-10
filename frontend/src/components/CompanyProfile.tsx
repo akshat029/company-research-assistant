@@ -1,453 +1,733 @@
-import React, { useState } from 'react';
+import { useMemo, useState } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
 import {
-  Building2, Globe, Calendar, MapPin, Users, Briefcase,
-  TrendingUp, Newspaper, Code2, Link2, Star, Target,
-  ChevronDown, ChevronUp, ExternalLink, Twitter, Linkedin,
-  Github, ShieldCheck, AlertTriangle, Lightbulb, Zap,
-  DollarSign, Award, Clock
+  Activity,
+  AlertTriangle,
+  Boxes,
+  Building2,
+  Calendar,
+  Check,
+  Clock,
+  Copy,
+  Cpu,
+  Database,
+  Github,
+  Globe,
+  Instagram,
+  Landmark,
+  Lightbulb,
+  Linkedin,
+  MapPin,
+  Newspaper,
+  ShieldAlert,
+  ShieldCheck,
+  Swords,
+  Target,
+  TrendingUp,
+  Twitter,
+  Users,
+  Wallet,
+  Youtube,
 } from 'lucide-react';
-import clsx from 'clsx';
-import { CompanyResearchResult, NewsItem } from '../types';
+import {
+  ageTone,
+  cn,
+  faviconUrl,
+  formatDate,
+  hasText,
+  hashHue,
+  hostOf,
+  initials,
+  isNonEmpty,
+  normalizeHref,
+  relativeTime,
+  sourceLabel,
+} from '../lib/utils';
+import { Badge, Card, EmptyHint, Field, LinkOut, SectionCard } from './ui/primitives';
+import type { CompanyResearchResult, NewsItem, SocialMedia, SourceRef } from '../types';
 
-interface CompanyProfileProps {
+interface Props {
   result: CompanyResearchResult;
   query: string;
   duration?: number;
   cached?: boolean;
 }
 
-function Section({ title, icon: Icon, color, children }: {
-  title: string;
-  icon: React.ElementType;
-  color: string;
-  children: React.ReactNode;
-}) {
-  const [open, setOpen] = useState(true);
+const CONFIDENCE = {
+  high: { pct: 1, tone: 'text-accent-lime', stroke: '#A3E635', label: 'High confidence' },
+  medium: { pct: 0.62, tone: 'text-accent-amber', stroke: '#FBBF24', label: 'Medium confidence' },
+  low: { pct: 0.28, tone: 'text-accent-rose', stroke: '#FB7185', label: 'Low confidence' },
+} as const;
+
+function ConfidenceRing({ level }: { level: 'high' | 'medium' | 'low' }) {
+  const conf = CONFIDENCE[level];
+  const r = 22;
+  const circumference = 2 * Math.PI * r;
+
   return (
-    <div className="bg-white rounded-2xl border border-surface-200 shadow-soft overflow-hidden">
-      <button
-        onClick={() => setOpen(!open)}
-        className="w-full flex items-center justify-between px-6 py-4 hover:bg-gray-50 transition-colors"
-      >
-        <div className="flex items-center gap-3">
-          <div className={`p-2 rounded-lg ${color}`}>
-            <Icon size={16} className="text-white" />
-          </div>
-          <h3 className="font-semibold text-gray-900 text-sm">{title}</h3>
-        </div>
-        {open ? <ChevronUp size={16} className="text-gray-400" /> : <ChevronDown size={16} className="text-gray-400" />}
-      </button>
-      {open && <div className="px-6 pb-6 border-t border-surface-100">{children}</div>}
+    <div className="relative flex h-14 w-14 shrink-0 items-center justify-center">
+      <svg className="h-14 w-14 -rotate-90" viewBox="0 0 56 56">
+        <circle cx="28" cy="28" r={r} fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="4" />
+        <motion.circle
+          cx="28"
+          cy="28"
+          r={r}
+          fill="none"
+          stroke={conf.stroke}
+          strokeWidth="4"
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          initial={{ strokeDashoffset: circumference }}
+          animate={{ strokeDashoffset: circumference * (1 - conf.pct) }}
+          transition={{ duration: 1, ease: 'easeOut' }}
+        />
+      </svg>
+      <span className={cn('absolute text-[10px] font-bold uppercase', conf.tone)}>{level}</span>
     </div>
   );
 }
 
-function SentimentBadge({ sentiment }: { sentiment?: string }) {
-  if (!sentiment) return null;
-  const map = {
-    positive: 'bg-green-100 text-green-700',
-    neutral: 'bg-gray-100 text-gray-600',
-    negative: 'bg-red-100 text-red-700',
-  };
+const SOCIALS: Array<{ key: keyof SocialMedia; icon: typeof Globe; label: string }> = [
+  { key: 'linkedin', icon: Linkedin, label: 'LinkedIn' },
+  { key: 'twitter', icon: Twitter, label: 'X' },
+  { key: 'github', icon: Github, label: 'GitHub' },
+  { key: 'youtube', icon: Youtube, label: 'YouTube' },
+  { key: 'instagram', icon: Instagram, label: 'Instagram' },
+];
+
+/** News card. The verified flag comes from the server, never from the model. */
+function NewsCard({ item }: { item: NewsItem }) {
+  const href = normalizeHref(item.url);
+  const tone = ageTone(item.date);
+  const rel = relativeTime(item.date);
+  const host = hostOf(item.url) ?? item.source;
+
   return (
-    <span className={clsx('text-xs px-2 py-0.5 rounded-full font-medium capitalize', map[sentiment as keyof typeof map] || map.neutral)}>
-      {sentiment}
-    </span>
+    <li className="group relative rounded-xl border border-white/[0.06] bg-white/[0.015] p-4 transition-colors hover:border-white/[0.12] hover:bg-white/[0.04]">
+      <div className="flex items-start justify-between gap-3">
+        <h4 className="min-w-0 text-sm font-medium leading-snug text-slate-100">
+          {href ? (
+            <LinkOut href={href} className="text-slate-100 hover:text-accent-cyan" icon={false}>
+              {item.title}
+            </LinkOut>
+          ) : (
+            item.title
+          )}
+        </h4>
+        {item.verified === false ? (
+          <Badge tone="amber" icon={<ShieldAlert className="h-3 w-3" />} className="shrink-0">
+            Unverified
+          </Badge>
+        ) : item.verified ? (
+          <Badge tone="lime" icon={<ShieldCheck className="h-3 w-3" />} className="shrink-0">
+            Verified
+          </Badge>
+        ) : null}
+      </div>
+
+      {hasText(item.summary) && (
+        <p className="mt-2 text-sm leading-relaxed text-slate-400">{item.summary}</p>
+      )}
+
+      <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+        {rel && (
+          <span
+            className={cn(
+              'inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 ring-1 ring-inset',
+              tone === 'fresh' && 'bg-accent-lime/10 text-accent-lime ring-accent-lime/20',
+              tone === 'recent' && 'bg-white/[0.05] text-slate-400 ring-white/10',
+              tone === 'stale' && 'bg-accent-amber/10 text-accent-amber ring-accent-amber/20',
+            )}
+          >
+            <Calendar className="h-3 w-3" />
+            {formatDate(item.date)} · {rel}
+          </span>
+        )}
+        {host && <span className="text-slate-500">{host}</span>}
+        {item.verified === false && (
+          <span className="text-slate-600">no retrieved source — link withheld</span>
+        )}
+      </div>
+    </li>
   );
 }
 
-function ConfidenceBadge({ confidence }: { confidence?: string }) {
-  const map = {
-    high: { label: 'High Confidence', cls: 'bg-green-100 text-green-700' },
-    medium: { label: 'Medium Confidence', cls: 'bg-yellow-100 text-yellow-700' },
-    low: { label: 'Low Confidence', cls: 'bg-red-100 text-red-700' },
-  };
-  const cfg = map[confidence as keyof typeof map] || map.medium;
-  return <span className={clsx('text-xs px-2.5 py-1 rounded-full font-medium', cfg.cls)}>{cfg.label}</span>;
-}
+export function CompanyProfile({ result, query, duration, cached }: Props) {
+  const [tab, setTab] = useState('overview');
+  const [copied, setCopied] = useState(false);
 
-export function CompanyProfile({ result, query, duration, cached }: CompanyProfileProps) {
-  const { basic_info, ai_summary, products_and_services, leadership, recent_news,
-    financial_info, competitors, tech_stack, social_media, swot_analysis,
-    culture_and_values, hiring_status, open_roles_summary, market_position,
-    target_market, sources, research_confidence, researched_at } = result;
+  const info = result.basic_info ?? {};
+  const level = (result.research_confidence ?? 'low') as 'high' | 'medium' | 'low';
+  const swot = result.swot_analysis;
+  const hue = hashHue(info.name ?? query);
+
+  // Annotated so both branches collapse to one type. Without this the union
+  // makes `s.title` infer as `unknown` and `tsc && vite build` fails.
+  const sources = useMemo<SourceRef[]>(() => {
+    if (isNonEmpty(result.source_details)) return result.source_details;
+    return (result.sources ?? []).map((url) => ({ url }));
+  }, [result.source_details, result.sources]);
+
+  const unverifiedCount = (result.recent_news ?? []).filter((n) => n.verified === false).length;
+
+  const tabs = [
+    { id: 'overview', label: 'Overview', icon: Building2 },
+    { id: 'products', label: 'Products', icon: Boxes, count: result.products_and_services?.length },
+    { id: 'people', label: 'People', icon: Users, count: result.leadership?.length },
+    { id: 'news', label: 'News', icon: Newspaper, count: result.recent_news?.length },
+    { id: 'market', label: 'Market', icon: TrendingUp, count: result.competitors?.length },
+    { id: 'sources', label: 'Sources', icon: Database, count: sources.length },
+  ].filter((t) => t.count === undefined || t.count > 0 || t.id === 'overview');
+
+  const copyJson = async () => {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(result, null, 2));
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    } catch {
+      setCopied(false);
+    }
+  };
 
   return (
-    <div className="w-full max-w-5xl mx-auto space-y-4 animate-slide-up pb-16">
+    <motion.div
+      initial={{ opacity: 0, y: 18 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+      className="mx-auto w-full max-w-6xl space-y-5"
+    >
+      {/* ------------------------------------------------------------ hero */}
+      <Card className="relative overflow-hidden">
+        <div
+          className="absolute inset-x-0 top-0 h-28 opacity-25"
+          style={{
+            background: `radial-gradient(60% 120% at 20% 0%, hsl(${hue} 85% 60% / 0.55), transparent 70%)`,
+          }}
+        />
 
-      {/* ── HERO HEADER ── */}
-      <div className="bg-gradient-to-br from-blue-600 to-blue-800 rounded-2xl p-8 text-white shadow-lg">
-        <div className="flex items-start justify-between mb-4">
-          <div className="flex-1">
-            <div className="flex items-center gap-3 mb-2">
-              <h1 className="text-3xl font-bold">{basic_info?.name || query}</h1>
-              {basic_info?.stock_ticker && (
-                <span className="text-xs px-2 py-1 bg-white/20 rounded-full font-mono">{basic_info.stock_ticker}</span>
+        <div className="relative p-6">
+          <div className="flex flex-wrap items-start gap-5">
+            <div
+              className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl text-xl font-bold text-white ring-1 ring-inset ring-white/15"
+              style={{ background: `linear-gradient(140deg, hsl(${hue} 70% 45%), hsl(${hue + 45} 70% 32%))` }}
+            >
+              {initials(info.name ?? query)}
+            </div>
+
+            <div className="min-w-0 flex-1">
+              <h1 className="text-2xl font-bold tracking-tight text-slate-50 sm:text-3xl">
+                {info.name ?? query}
+              </h1>
+              {hasText(info.tagline) && (
+                <p className="mt-1 text-sm text-accent-cyan">{info.tagline}</p>
               )}
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                {hasText(info.website) && (
+                  <LinkOut href={info.website}>
+                    <span className="inline-flex items-center gap-1.5">
+                      <Globe className="h-3.5 w-3.5" />
+                      {hostOf(info.website)}
+                    </span>
+                  </LinkOut>
+                )}
+                {hasText(info.industry) && <Badge tone="violet">{info.industry}</Badge>}
+                {hasText(info.company_type) && <Badge>{info.company_type}</Badge>}
+                {hasText(info.stock_ticker) && <Badge tone="lime">{info.stock_ticker}</Badge>}
+              </div>
             </div>
-            {basic_info?.tagline && (
-              <p className="text-blue-100 text-sm italic mb-3">{basic_info.tagline}</p>
-            )}
-            {basic_info?.description && (
-              <p className="text-blue-50 text-sm leading-relaxed max-w-2xl">{basic_info.description}</p>
-            )}
+
+            <div className="flex items-center gap-4">
+              <ConfidenceRing level={level} />
+              <button
+                type="button"
+                onClick={copyJson}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-white/[0.08] px-2.5 py-1.5 text-xs text-slate-400 transition-colors hover:border-white/20 hover:text-slate-100"
+              >
+                {copied ? <Check className="h-3 w-3 text-accent-lime" /> : <Copy className="h-3 w-3" />}
+                {copied ? 'Copied' : 'JSON'}
+              </button>
+            </div>
           </div>
-          <div className="flex flex-col items-end gap-2 ml-4">
-            <ConfidenceBadge confidence={research_confidence} />
-            {cached && <span className="text-xs px-2 py-0.5 bg-white/20 rounded-full">Cached</span>}
-            {duration && <span className="text-xs text-blue-200">{duration}s</span>}
-          </div>
+
+          {hasText(info.description) && (
+            <p className="mt-5 max-w-3xl text-pretty text-sm leading-relaxed text-slate-300">
+              {info.description}
+            </p>
+          )}
+
+          <dl className="mt-5 grid grid-cols-2 gap-4 sm:grid-cols-4">
+            <Field label="Founded" value={info.founded} />
+            <Field
+              label="Headquarters"
+              value={
+                hasText(info.headquarters) ? (
+                  <span className="inline-flex items-center gap-1">
+                    <MapPin className="h-3 w-3 text-slate-500" />
+                    {info.headquarters}
+                  </span>
+                ) : undefined
+              }
+            />
+            <Field label="Size" value={info.company_size} />
+            <Field label="Sources" value={sources.length ? `${sources.length} retrieved` : undefined} />
+          </dl>
         </div>
 
-        {/* Quick stats */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-6">
-          {basic_info?.industry && (
-            <div className="bg-white/10 rounded-xl p-3">
-              <div className="text-xs text-blue-200 mb-1">Industry</div>
-              <div className="text-sm font-medium">{basic_info.industry}</div>
-            </div>
+        {/* --------------------------------------------------- provenance bar */}
+        <div className="hairline mx-6 h-px" />
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 px-6 py-3 text-[11px] text-slate-500">
+          <span className="inline-flex items-center gap-1.5">
+            <Activity className="h-3 w-3" />
+            {CONFIDENCE[level].label}
+          </span>
+          {hasText(result.data_freshness) && (
+            <span className="inline-flex items-center gap-1.5">
+              <Clock className="h-3 w-3" />
+              Freshest source {result.data_freshness}
+            </span>
           )}
-          {basic_info?.founded && (
-            <div className="bg-white/10 rounded-xl p-3">
-              <div className="text-xs text-blue-200 mb-1">Founded</div>
-              <div className="text-sm font-medium">{basic_info.founded}</div>
-            </div>
+          {result.researched_at && (
+            <span className="inline-flex items-center gap-1.5">
+              <Calendar className="h-3 w-3" />
+              Run {relativeTime(result.researched_at)}
+            </span>
           )}
-          {basic_info?.headquarters && (
-            <div className="bg-white/10 rounded-xl p-3">
-              <div className="text-xs text-blue-200 mb-1">HQ</div>
-              <div className="text-sm font-medium">{basic_info.headquarters}</div>
-            </div>
-          )}
-          {basic_info?.company_size && (
-            <div className="bg-white/10 rounded-xl p-3">
-              <div className="text-xs text-blue-200 mb-1">Size</div>
-              <div className="text-sm font-medium">{basic_info.company_size}</div>
-            </div>
+          {typeof duration === 'number' && <span>{duration.toFixed(1)}s</span>}
+          {cached && <Badge tone="cyan">cached</Badge>}
+          {unverifiedCount > 0 && (
+            <span className="inline-flex items-center gap-1.5 text-accent-amber">
+              <AlertTriangle className="h-3 w-3" />
+              {unverifiedCount} claim{unverifiedCount > 1 ? 's' : ''} could not be linked to a source
+            </span>
           )}
         </div>
+      </Card>
 
-        {/* Links */}
-        <div className="flex flex-wrap gap-3 mt-4">
-          {basic_info?.website && (
-            <a href={basic_info.website} target="_blank" rel="noopener noreferrer"
-              className="flex items-center gap-1.5 text-xs bg-white/20 hover:bg-white/30 px-3 py-1.5 rounded-full transition-colors">
-              <Globe size={12} /> {basic_info.website.replace(/^https?:\/\//, '')}
-            </a>
-          )}
-          {social_media?.linkedin && (
-            <a href={social_media.linkedin} target="_blank" rel="noopener noreferrer"
-              className="flex items-center gap-1.5 text-xs bg-white/20 hover:bg-white/30 px-3 py-1.5 rounded-full transition-colors">
-              <Linkedin size={12} /> LinkedIn
-            </a>
-          )}
-          {social_media?.twitter && (
-            <a href={social_media.twitter} target="_blank" rel="noopener noreferrer"
-              className="flex items-center gap-1.5 text-xs bg-white/20 hover:bg-white/30 px-3 py-1.5 rounded-full transition-colors">
-              <Twitter size={12} /> Twitter/X
-            </a>
-          )}
-          {social_media?.github && (
-            <a href={social_media.github} target="_blank" rel="noopener noreferrer"
-              className="flex items-center gap-1.5 text-xs bg-white/20 hover:bg-white/30 px-3 py-1.5 rounded-full transition-colors">
-              <Github size={12} /> GitHub
-            </a>
-          )}
+      {hasText(result.ai_summary) && (
+        <Card className="border-accent-violet/20 bg-accent-violet/[0.04] p-5">
+          <div className="flex items-start gap-3">
+            <Lightbulb className="mt-0.5 h-4 w-4 shrink-0 text-accent-violet" />
+            <p className="text-pretty text-sm leading-relaxed text-slate-200">{result.ai_summary}</p>
+          </div>
+        </Card>
+      )}
+
+      {/* ------------------------------------------------------------ tabs */}
+      <div className="sticky top-2 z-20">
+        <div className="glass-strong flex gap-1 overflow-x-auto rounded-xl p-1">
+          {tabs.map((t) => {
+            const Icon = t.icon;
+            const active = tab === t.id;
+            return (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => setTab(t.id)}
+                className={cn(
+                  'relative inline-flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium transition-colors',
+                  active ? 'text-white' : 'text-slate-400 hover:text-slate-200',
+                )}
+              >
+                {active && (
+                  <motion.span
+                    layoutId="tab-pill"
+                    className="absolute inset-0 rounded-lg bg-white/[0.09] ring-1 ring-inset ring-white/10"
+                    transition={{ type: 'spring', stiffness: 380, damping: 30 }}
+                  />
+                )}
+                <Icon className="relative h-3.5 w-3.5" />
+                <span className="relative">{t.label}</span>
+                {typeof t.count === 'number' && t.count > 0 && (
+                  <span className="relative text-[10px] text-slate-500">{t.count}</span>
+                )}
+              </button>
+            );
+          })}
         </div>
       </div>
 
-      {/* ── AI SUMMARY ── */}
-      {ai_summary && (
-        <div className="bg-blue-50 border border-blue-100 rounded-2xl p-6">
-          <div className="flex items-center gap-2 mb-3">
-            <Zap size={16} className="text-blue-600" />
-            <span className="font-semibold text-blue-900 text-sm">AI Executive Summary</span>
-          </div>
-          <p className="text-blue-800 text-sm leading-relaxed">{ai_summary}</p>
-        </div>
-      )}
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={tab}
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -8 }}
+          transition={{ duration: 0.22 }}
+          className="grid gap-5 lg:grid-cols-2"
+        >
+          {/* ------------------------------------------------------ overview */}
+          {tab === 'overview' && (
+            <>
+              <SectionCard title="Market position" icon={<Target className="h-4 w-4" />}>
+                {hasText(result.market_position) ? (
+                  <p className="text-sm leading-relaxed text-slate-300">{result.market_position}</p>
+                ) : (
+                  <EmptyHint>No sourced positioning statement was found.</EmptyHint>
+                )}
+                {hasText(result.target_market) && (
+                  <>
+                    <div className="hairline my-4 h-px" />
+                    <p className="text-[11px] uppercase tracking-wider text-slate-500">Target market</p>
+                    <p className="mt-1 text-sm text-slate-300">{result.target_market}</p>
+                  </>
+                )}
+              </SectionCard>
 
-      {/* ── TWO COLUMN LAYOUT ── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <SectionCard title="Culture and hiring" icon={<Users className="h-4 w-4" />}>
+                {hasText(result.culture_and_values) ? (
+                  <p className="text-sm leading-relaxed text-slate-300">{result.culture_and_values}</p>
+                ) : (
+                  <EmptyHint>No sourced culture information was found.</EmptyHint>
+                )}
+                {hasText(result.hiring_status) && (
+                  <div className="mt-3">
+                    <Badge tone="lime">{result.hiring_status}</Badge>
+                  </div>
+                )}
+                {hasText(result.open_roles_summary) && (
+                  <p className="mt-3 text-sm text-slate-400">{result.open_roles_summary}</p>
+                )}
+              </SectionCard>
 
-        {/* Products & Services */}
-        {products_and_services && products_and_services.length > 0 && (
-          <Section title="Products & Services" icon={Briefcase} color="bg-purple-500">
-            <div className="space-y-3 mt-4">
-              {products_and_services.map((p, i) => (
-                <div key={i} className="flex gap-3">
-                  <div className="w-6 h-6 rounded-full bg-purple-100 flex items-center justify-center flex-shrink-0 mt-0.5">
-                    <span className="text-xs font-bold text-purple-600">{i + 1}</span>
-                  </div>
-                  <div>
-                    <div className="font-medium text-gray-900 text-sm">{p.name}</div>
-                    {p.description && <div className="text-xs text-gray-500 mt-0.5">{p.description}</div>}
-                    {p.category && <span className="inline-block mt-1 text-xs px-2 py-0.5 bg-purple-50 text-purple-600 rounded-full">{p.category}</span>}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </Section>
-        )}
-
-        {/* Leadership */}
-        {leadership && leadership.length > 0 && (
-          <Section title="Leadership Team" icon={Users} color="bg-green-500">
-            <div className="space-y-3 mt-4">
-              {leadership.map((person, i) => (
-                <div key={i} className="flex items-start gap-3">
-                  <div className="w-9 h-9 rounded-full bg-gradient-to-br from-green-400 to-emerald-600 flex items-center justify-center flex-shrink-0 text-white text-sm font-bold">
-                    {person.name.charAt(0)}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-gray-900 text-sm truncate">{person.name}</span>
-                      {person.linkedin_url && (
-                        <a href={person.linkedin_url} target="_blank" rel="noopener noreferrer">
-                          <Linkedin size={12} className="text-blue-500" />
-                        </a>
+              {swot && (
+                <div className="lg:col-span-2">
+                  <SectionCard title="SWOT" icon={<Swords className="h-4 w-4" />}>
+                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                      {(
+                        [
+                          ['Strengths', swot.strengths, 'lime'],
+                          ['Weaknesses', swot.weaknesses, 'rose'],
+                          ['Opportunities', swot.opportunities, 'cyan'],
+                          ['Threats', swot.threats, 'amber'],
+                        ] as const
+                      ).map(([label, items, tone]) =>
+                        isNonEmpty(items) ? (
+                          <div key={label}>
+                            <Badge tone={tone}>{label}</Badge>
+                            <ul className="mt-2 space-y-1.5">
+                              {items.map((s) => (
+                                <li key={s} className="text-xs leading-relaxed text-slate-400">
+                                  • {s}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : null,
                       )}
                     </div>
-                    <div className="text-xs text-gray-500">{person.title}</div>
-                    {person.bio && <div className="text-xs text-gray-400 mt-1 line-clamp-2">{person.bio}</div>}
-                  </div>
+                  </SectionCard>
                 </div>
-              ))}
-            </div>
-          </Section>
-        )}
+              )}
 
-        {/* Financials */}
-        {financial_info && (
-          <Section title="Funding & Financials" icon={DollarSign} color="bg-yellow-500">
-            <div className="space-y-3 mt-4">
-              {financial_info.total_funding && (
-                <div className="flex justify-between items-center py-2 border-b border-surface-100">
-                  <span className="text-sm text-gray-500">Total Funding</span>
-                  <span className="font-semibold text-gray-900 text-sm">{financial_info.total_funding}</span>
+              {isNonEmpty(SOCIALS.filter((s) => hasText(result.social_media?.[s.key]))) && (
+                <div className="lg:col-span-2">
+                  <SectionCard title="Official channels" icon={<Globe className="h-4 w-4" />}>
+                    <div className="flex flex-wrap gap-2">
+                      {SOCIALS.map(({ key, icon: Icon, label }) => {
+                        const value = result.social_media?.[key];
+                        if (!hasText(value)) return null;
+                        return (
+                          <LinkOut
+                            key={key}
+                            href={value}
+                            icon={false}
+                            className="rounded-lg border border-white/[0.07] bg-white/[0.02] px-3 py-2 text-xs hover:border-white/20"
+                          >
+                            <span className="inline-flex items-center gap-2">
+                              <Icon className="h-3.5 w-3.5" />
+                              {label}
+                            </span>
+                          </LinkOut>
+                        );
+                      })}
+                    </div>
+                  </SectionCard>
                 </div>
               )}
-              {financial_info.last_valuation && (
-                <div className="flex justify-between items-center py-2 border-b border-surface-100">
-                  <span className="text-sm text-gray-500">Valuation</span>
-                  <span className="font-semibold text-gray-900 text-sm">{financial_info.last_valuation}</span>
-                </div>
-              )}
-              {financial_info.revenue && (
-                <div className="flex justify-between items-center py-2 border-b border-surface-100">
-                  <span className="text-sm text-gray-500">Revenue</span>
-                  <span className="font-semibold text-gray-900 text-sm">{financial_info.revenue}</span>
-                </div>
-              )}
-              {financial_info.ipo_status && (
-                <div className="flex justify-between items-center py-2 border-b border-surface-100">
-                  <span className="text-sm text-gray-500">IPO Status</span>
-                  <span className="font-semibold text-gray-900 text-sm">{financial_info.ipo_status}</span>
-                </div>
-              )}
-              {financial_info.investors && financial_info.investors.length > 0 && (
-                <div>
-                  <div className="text-xs text-gray-500 mb-2">Key Investors</div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {financial_info.investors.slice(0, 8).map((inv, i) => (
-                      <span key={i} className="text-xs px-2 py-0.5 bg-yellow-50 text-yellow-700 rounded-full border border-yellow-100">{inv}</span>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {financial_info.funding_rounds && financial_info.funding_rounds.length > 0 && (
-                <div>
-                  <div className="text-xs text-gray-500 mb-2">Funding Rounds</div>
-                  <div className="space-y-2">
-                    {financial_info.funding_rounds.slice(0, 5).map((round, i) => (
-                      <div key={i} className="flex items-center gap-2 text-xs">
-                        <span className="px-2 py-0.5 bg-gray-100 text-gray-600 rounded-full font-medium">{round.round_type}</span>
-                        {round.amount && <span className="font-semibold text-gray-900">{round.amount}</span>}
-                        {round.date && <span className="text-gray-400">{round.date}</span>}
+            </>
+          )}
+
+          {/* ------------------------------------------------------ products */}
+          {tab === 'products' && (
+            <>
+              <SectionCard
+                title="Products and services"
+                icon={<Boxes className="h-4 w-4" />}
+                count={result.products_and_services?.length}
+                className="lg:col-span-2"
+              >
+                {isNonEmpty(result.products_and_services) ? (
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                    {result.products_and_services.map((p) => (
+                      <div
+                        key={p.name}
+                        className="rounded-xl border border-white/[0.06] bg-white/[0.015] p-4 transition-colors hover:border-white/[0.12]"
+                      >
+                        <p className="text-sm font-medium text-slate-100">{p.name}</p>
+                        {hasText(p.category) && (
+                          <span className="mt-1 inline-block text-[11px] text-accent-violet">
+                            {p.category}
+                          </span>
+                        )}
+                        {hasText(p.description) && (
+                          <p className="mt-2 text-xs leading-relaxed text-slate-400">{p.description}</p>
+                        )}
                       </div>
                     ))}
                   </div>
+                ) : (
+                  <EmptyHint>No products were confirmed by the retrieved sources.</EmptyHint>
+                )}
+              </SectionCard>
+
+              {isNonEmpty(result.tech_stack) && (
+                <div className="lg:col-span-2">
+                  <SectionCard title="Tech stack" icon={<Cpu className="h-4 w-4" />}>
+                    <div className="space-y-3">
+                      {result.tech_stack.map((t) => (
+                        <div key={t.category}>
+                          <p className="text-[11px] uppercase tracking-wider text-slate-500">
+                            {t.category}
+                          </p>
+                          <div className="mt-1.5 flex flex-wrap gap-1.5">
+                            {t.technologies.map((tech) => (
+                              <Badge key={tech}>{tech}</Badge>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </SectionCard>
                 </div>
               )}
-            </div>
-          </Section>
-        )}
+            </>
+          )}
 
-        {/* Competitors */}
-        {competitors && competitors.length > 0 && (
-          <Section title="Competitors" icon={Target} color="bg-red-500">
-            <div className="space-y-2 mt-4">
-              {competitors.map((comp, i) => (
-                <div key={i} className="flex items-center gap-3 p-2.5 rounded-lg hover:bg-gray-50 transition-colors">
-                  <div className="w-7 h-7 rounded-lg bg-red-50 flex items-center justify-center flex-shrink-0">
-                    <Building2 size={14} className="text-red-500" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-gray-900 text-sm">{comp.name}</span>
-                      {comp.website && (
-                        <a href={comp.website} target="_blank" rel="noopener noreferrer">
-                          <ExternalLink size={11} className="text-gray-400" />
-                        </a>
-                      )}
-                    </div>
-                    {comp.description && <div className="text-xs text-gray-500 truncate">{comp.description}</div>}
-                  </div>
-                </div>
-              ))}
-            </div>
-            {market_position && (
-              <div className="mt-4 pt-4 border-t border-surface-100">
-                <div className="text-xs text-gray-500 mb-1">Market Position</div>
-                <p className="text-sm text-gray-700">{market_position}</p>
-              </div>
-            )}
-          </Section>
-        )}
-      </div>
-
-      {/* ── FULL WIDTH SECTIONS ── */}
-
-      {/* Recent News */}
-      {recent_news && recent_news.length > 0 && (
-        <Section title="Recent News" icon={Newspaper} color="bg-orange-500">
-          <div className="space-y-3 mt-4">
-            {recent_news.map((item, i) => (
-              <div key={i} className="flex gap-4 p-3 rounded-xl hover:bg-gray-50 transition-colors border border-surface-100">
-                <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-orange-50 flex items-center justify-center">
-                  <span className="text-xs font-bold text-orange-500">{i + 1}</span>
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      {item.url ? (
-                        <a href={item.url} target="_blank" rel="noopener noreferrer"
-                          className="font-medium text-gray-900 text-sm hover:text-blue-600 transition-colors">
-                          {item.title}
-                        </a>
-                      ) : (
-                        <div className="font-medium text-gray-900 text-sm">{item.title}</div>
-                      )}
-                      {item.summary && <p className="text-xs text-gray-500 mt-1">{item.summary}</p>}
-                    </div>
-                    <SentimentBadge sentiment={item.sentiment} />
-                  </div>
-                  <div className="flex items-center gap-3 mt-2">
-                    {item.source && <span className="text-xs text-gray-400">{item.source}</span>}
-                    {item.date && <span className="text-xs text-gray-400 flex items-center gap-1"><Clock size={10} />{item.date}</span>}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </Section>
-      )}
-
-      {/* SWOT Analysis */}
-      {swot_analysis && (
-        <Section title="SWOT Analysis" icon={Award} color="bg-indigo-500">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-            {[{
-              key: 'strengths', label: 'Strengths', icon: ShieldCheck,
-              cls: 'bg-green-50 border-green-200', titleCls: 'text-green-700', dotCls: 'bg-green-400'
-            }, {
-              key: 'weaknesses', label: 'Weaknesses', icon: AlertTriangle,
-              cls: 'bg-red-50 border-red-200', titleCls: 'text-red-700', dotCls: 'bg-red-400'
-            }, {
-              key: 'opportunities', label: 'Opportunities', icon: Lightbulb,
-              cls: 'bg-blue-50 border-blue-200', titleCls: 'text-blue-700', dotCls: 'bg-blue-400'
-            }, {
-              key: 'threats', label: 'Threats', icon: Zap,
-              cls: 'bg-orange-50 border-orange-200', titleCls: 'text-orange-700', dotCls: 'bg-orange-400'
-            }].map(({ key, label, icon: Icon, cls, titleCls, dotCls }) => {
-              const items = swot_analysis[key as keyof typeof swot_analysis] || [];
-              return (
-                <div key={key} className={`rounded-xl border p-4 ${cls}`}>
-                  <div className={`flex items-center gap-2 mb-3 font-semibold text-sm ${titleCls}`}>
-                    <Icon size={14} /> {label}
-                  </div>
-                  <ul className="space-y-1.5">
-                    {items.map((item, i) => (
-                      <li key={i} className="flex items-start gap-2 text-xs text-gray-700">
-                        <div className={`w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0 ${dotCls}`} />
-                        {item}
-                      </li>
+          {/* -------------------------------------------------------- people */}
+          {tab === 'people' && (
+            <div className="lg:col-span-2">
+              <SectionCard
+                title="Leadership"
+                icon={<Users className="h-4 w-4" />}
+                count={result.leadership?.length}
+              >
+                {isNonEmpty(result.leadership) ? (
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                    {result.leadership.map((person) => (
+                      <div
+                        key={`${person.name}-${person.title}`}
+                        className="flex gap-3 rounded-xl border border-white/[0.06] bg-white/[0.015] p-4"
+                      >
+                        <div
+                          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-xs font-semibold text-white"
+                          style={{
+                            background: `linear-gradient(140deg, hsl(${hashHue(person.name)} 65% 45%), hsl(${
+                              hashHue(person.name) + 40
+                            } 65% 30%))`,
+                          }}
+                        >
+                          {initials(person.name)}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium text-slate-100">{person.name}</p>
+                          <p className="truncate text-xs text-slate-400">{person.title}</p>
+                          {hasText(person.bio) && (
+                            <p className="mt-1.5 text-xs leading-relaxed text-slate-500">{person.bio}</p>
+                          )}
+                          {hasText(person.linkedin_url) && (
+                            <LinkOut href={person.linkedin_url} className="mt-1.5 text-xs" icon={false}>
+                              <span className="inline-flex items-center gap-1">
+                                <Linkedin className="h-3 w-3" />
+                                Profile
+                              </span>
+                            </LinkOut>
+                          )}
+                        </div>
+                      </div>
                     ))}
-                  </ul>
-                </div>
-              );
-            })}
-          </div>
-        </Section>
-      )}
-
-      {/* Tech Stack */}
-      {tech_stack && tech_stack.length > 0 && (
-        <Section title="Tech Stack" icon={Code2} color="bg-cyan-500">
-          <div className="space-y-4 mt-4">
-            {tech_stack.map((stack, i) => (
-              <div key={i}>
-                <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">{stack.category}</div>
-                <div className="flex flex-wrap gap-2">
-                  {stack.technologies.map((tech, j) => (
-                    <span key={j} className="text-xs px-2.5 py-1 bg-gray-100 text-gray-700 rounded-lg font-medium border border-surface-200">{tech}</span>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        </Section>
-      )}
-
-      {/* Culture & Hiring */}
-      {(culture_and_values || hiring_status || open_roles_summary) && (
-        <Section title="Culture & Hiring" icon={Star} color="bg-pink-500">
-          <div className="space-y-4 mt-4">
-            {culture_and_values && (
-              <div>
-                <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Culture & Values</div>
-                <p className="text-sm text-gray-700">{culture_and_values}</p>
-              </div>
-            )}
-            {hiring_status && (
-              <div className="flex items-center gap-2">
-                <Briefcase size={14} className="text-pink-500" />
-                <span className="text-sm text-gray-700">{hiring_status}</span>
-              </div>
-            )}
-            {open_roles_summary && (
-              <div>
-                <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Open Roles</div>
-                <p className="text-sm text-gray-700">{open_roles_summary}</p>
-              </div>
-            )}
-          </div>
-        </Section>
-      )}
-
-      {/* Sources */}
-      {sources && sources.length > 0 && (
-        <div className="bg-gray-50 rounded-xl border border-surface-200 p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <Link2 size={14} className="text-gray-400" />
-            <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Sources ({sources.length})</span>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {sources.slice(0, 15).map((src, i) => (
-              <a key={i} href={src} target="_blank" rel="noopener noreferrer"
-                className="text-xs text-blue-600 hover:text-blue-800 hover:underline truncate max-w-xs">
-                {src.replace(/^https?:\/\//, '').split('/')[0]}
-              </a>
-            ))}
-          </div>
-          {researched_at && (
-            <div className="mt-3 text-xs text-gray-400 flex items-center gap-1">
-              <Clock size={10} />
-              Researched at {new Date(researched_at).toLocaleString()}
+                  </div>
+                ) : (
+                  <EmptyHint>No named executives were confirmed by the retrieved sources.</EmptyHint>
+                )}
+              </SectionCard>
             </div>
           )}
-        </div>
-      )}
-    </div>
+
+          {/* ---------------------------------------------------------- news */}
+          {tab === 'news' && (
+            <div className="lg:col-span-2">
+              <SectionCard
+                title="Recent news"
+                icon={<Newspaper className="h-4 w-4" />}
+                count={result.recent_news?.length}
+                actions={
+                  <span className="text-[11px] text-slate-500">Verified against retrieved sources</span>
+                }
+              >
+                {isNonEmpty(result.recent_news) ? (
+                  <ul className="space-y-3">
+                    {result.recent_news.map((item) => (
+                      <NewsCard key={`${item.title}-${item.date ?? ''}`} item={item} />
+                    ))}
+                  </ul>
+                ) : (
+                  <EmptyHint>No recent news was found in the recency window.</EmptyHint>
+                )}
+              </SectionCard>
+            </div>
+          )}
+
+          {/* -------------------------------------------------------- market */}
+          {tab === 'market' && (
+            <>
+              <SectionCard
+                title="Competitors"
+                icon={<Swords className="h-4 w-4" />}
+                count={result.competitors?.length}
+              >
+                {isNonEmpty(result.competitors) ? (
+                  <ul className="space-y-2">
+                    {result.competitors.map((c) => {
+                      const favicon = faviconUrl(c.website);
+                      return (
+                        <li
+                          key={c.name}
+                          className="flex items-start gap-3 rounded-lg border border-white/[0.06] bg-white/[0.015] p-3"
+                        >
+                          {favicon ? (
+                            <img
+                              src={favicon}
+                              alt=""
+                              width={16}
+                              height={16}
+                              loading="lazy"
+                              className="mt-0.5 h-4 w-4 shrink-0 rounded-sm"
+                            />
+                          ) : (
+                            <Building2 className="mt-0.5 h-4 w-4 shrink-0 text-slate-600" />
+                          )}
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium text-slate-100">{c.name}</p>
+                            {hasText(c.description) && (
+                              <p className="text-xs text-slate-500">{c.description}</p>
+                            )}
+                            {hasText(c.website) && (
+                              <LinkOut href={c.website} className="text-xs">
+                                {hostOf(c.website)}
+                              </LinkOut>
+                            )}
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                ) : (
+                  <EmptyHint>No competitors were confirmed by the retrieved sources.</EmptyHint>
+                )}
+              </SectionCard>
+
+              <SectionCard title="Funding and financials" icon={<Wallet className="h-4 w-4" />}>
+                {result.financial_info ? (
+                  <>
+                    <dl className="grid grid-cols-2 gap-4">
+                      <Field label="Total funding" value={result.financial_info.total_funding} />
+                      <Field label="Valuation" value={result.financial_info.last_valuation} />
+                      <Field label="Revenue" value={result.financial_info.revenue} />
+                      <Field label="IPO status" value={result.financial_info.ipo_status} />
+                    </dl>
+
+                    {isNonEmpty(result.financial_info.funding_rounds) && (
+                      <>
+                        <div className="hairline my-4 h-px" />
+                        <ol className="space-y-2">
+                          {result.financial_info.funding_rounds.map((round, i) => (
+                            <li
+                              key={`${round.round_type ?? 'round'}-${i}`}
+                              className="flex items-center justify-between gap-3 text-sm"
+                            >
+                              <span className="inline-flex items-center gap-2 text-slate-300">
+                                <Landmark className="h-3.5 w-3.5 text-slate-600" />
+                                {round.round_type ?? 'Round'}
+                              </span>
+                              <span className="text-slate-400">{round.amount}</span>
+                              <span className="text-xs text-slate-600">{round.date}</span>
+                            </li>
+                          ))}
+                        </ol>
+                      </>
+                    )}
+
+                    {isNonEmpty(result.financial_info.investors) && (
+                      <div className="mt-4 flex flex-wrap gap-1.5">
+                        {result.financial_info.investors.map((inv) => (
+                          <Badge key={inv}>{inv}</Badge>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <EmptyHint>No financial data was confirmed by the retrieved sources.</EmptyHint>
+                )}
+              </SectionCard>
+            </>
+          )}
+
+          {/* ------------------------------------------------------- sources */}
+          {tab === 'sources' && (
+            <div className="lg:col-span-2">
+              <SectionCard
+                title="Retrieved sources"
+                icon={<Database className="h-4 w-4" />}
+                count={sources.length}
+                actions={
+                  <span className="text-[11px] text-slate-500">
+                    Every link below was actually returned by a search
+                  </span>
+                }
+              >
+                {sources.length > 0 ? (
+                  <ul className="grid gap-2 sm:grid-cols-2">
+                    {sources.map((s) => {
+                      const favicon = faviconUrl(s.url);
+                      const published = s.published_date;
+                      return (
+                        <li
+                          key={s.url}
+                          className="flex items-start gap-3 rounded-lg border border-white/[0.06] bg-white/[0.015] p-3 transition-colors hover:border-white/[0.12]"
+                        >
+                          {favicon ? (
+                            <img
+                              src={favicon}
+                              alt=""
+                              width={16}
+                              height={16}
+                              loading="lazy"
+                              className="mt-0.5 h-4 w-4 shrink-0 rounded-sm"
+                            />
+                          ) : (
+                            <Globe className="mt-0.5 h-4 w-4 shrink-0 text-slate-600" />
+                          )}
+                          <div className="min-w-0">
+                            <LinkOut href={s.url} className="text-xs" icon={false}>
+                              {hasText(s.title) ? s.title : sourceLabel(s.url)}
+                            </LinkOut>
+                            <p className="mt-0.5 truncate text-[11px] text-slate-600">
+                              {hostOf(s.url)}
+                              {published ? ` · ${formatDate(published)}` : ''}
+                            </p>
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                ) : (
+                  <EmptyHint>No sources were recorded for this run.</EmptyHint>
+                )}
+              </SectionCard>
+            </div>
+          )}
+        </motion.div>
+      </AnimatePresence>
+    </motion.div>
   );
 }
