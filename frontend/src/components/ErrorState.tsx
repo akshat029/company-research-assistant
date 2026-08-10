@@ -28,7 +28,7 @@ function diagnose(error: string) {
       title: pkg ? `The backend is missing ${pkg}` : 'A Python package is missing',
       steps: [
         'Open a terminal in the backend folder',
-        'Activate the venv: venv\Scripts\activate',
+        'Activate the venv: venv\\Scripts\\activate',
         pkg ? `Install it: pip install ${pkg}` : 'Install the missing package',
         'Safest: pip install -r requirements.txt',
         'Restart uvicorn, then retry',
@@ -43,7 +43,7 @@ function diagnose(error: string) {
       title: 'The backend is not reachable',
       steps: [
         'Open a terminal in the backend folder',
-        'Activate the venv: venv\Scripts\activate',
+        'Activate the venv: venv\\Scripts\\activate',
         'Run: python -m uvicorn app.main:app --reload --port 8000',
         'Confirm http://localhost:8000/api/v1/health returns ok',
       ],
