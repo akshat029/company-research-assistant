@@ -44,7 +44,14 @@ import {
   sourceLabel,
 } from '../lib/utils';
 import { Badge, Card, EmptyHint, Field, LinkOut, SectionCard } from './ui/primitives';
-import type { CompanyResearchResult, NewsItem, SocialMedia, SourceRef } from '../types';
+import type {
+  AnalysisPoint,
+  CompanyResearchResult,
+  NewsItem,
+  RiskItem,
+  SocialMedia,
+  SourceRef,
+} from '../types';
 
 interface Props {
   result: CompanyResearchResult;
@@ -152,6 +159,138 @@ function NewsCard({ item }: { item: NewsItem }) {
   );
 }
 
+/* --------------------------------------------------------------- analysis */
+
+/**
+ * The API always sends these arrays, but a missing one must never white-screen
+ * the whole profile over a section the user may not even be looking at.
+ */
+const arr = <T,>(v: T[] | undefined): T[] => v ?? [];
+
+const SEVERITY_TONE = { high: 'rose', medium: 'amber', low: 'neutral' } as const;
+
+/**
+ * Renders the sources an analytical claim rests on.
+ *
+ * Domains rather than footnote numbers: "from techcrunch.com" is legible where
+ * it stands, whereas "[3]" makes the reader go and count. The backend has
+ * already discarded any index that does not resolve, so every chip here points
+ * at a source that was genuinely retrieved.
+ */
+function Cites({
+  indices,
+  sources,
+  onJump,
+}: {
+  indices?: number[];
+  sources: SourceRef[];
+  onJump: () => void;
+}) {
+  const refs = arr(indices)
+    .map((i) => sources[i])
+    .filter((s): s is SourceRef => Boolean(s));
+
+  if (refs.length === 0) return null;
+
+  return (
+    <span className="mt-2 flex flex-wrap items-center gap-1">
+      <span className="text-[10px] uppercase tracking-wider text-slate-600">from</span>
+      {refs.slice(0, 4).map((s, i) => (
+        <button
+          key={`${s.url}-${i}`}
+          type="button"
+          onClick={onJump}
+          title={hasText(s.title) ? s.title : s.url}
+          className="rounded border border-white/[0.08] bg-white/[0.03] px-1.5 py-px text-[10px] text-slate-500 transition-colors hover:border-accent-cyan/40 hover:text-accent-cyan"
+        >
+          {s.domain ?? hostOf(s.url)}
+        </button>
+      ))}
+      {refs.length > 4 && <span className="text-[10px] text-slate-600">+{refs.length - 4}</span>}
+    </span>
+  );
+}
+
+function PointList({
+  points,
+  sources,
+  onJump,
+}: {
+  points?: AnalysisPoint[];
+  sources: SourceRef[];
+  onJump: () => void;
+}) {
+  const items = arr(points);
+
+  if (items.length === 0) {
+    return <EmptyHint>The analyst had nothing supportable to say here.</EmptyHint>;
+  }
+
+  return (
+    <ul className="space-y-4">
+      {items.map((p, i) => (
+        <li key={`${p.point}-${i}`} className="border-l-2 border-accent-violet/25 pl-3.5">
+          <div className="flex items-start justify-between gap-3">
+            <p className="text-pretty text-sm leading-relaxed text-slate-200">{p.point}</p>
+            {p.confidence && p.confidence !== 'high' && (
+              <span className="mt-0.5 shrink-0 text-[10px] uppercase tracking-wider text-slate-600">
+                {p.confidence}
+              </span>
+            )}
+          </div>
+          {hasText(p.rationale) && (
+            <p className="mt-1.5 text-pretty text-xs leading-relaxed text-slate-500">
+              {p.rationale}
+            </p>
+          )}
+          <Cites indices={p.derived_from} sources={sources} onJump={onJump} />
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function RiskList({
+  risks,
+  sources,
+  onJump,
+}: {
+  risks?: RiskItem[];
+  sources: SourceRef[];
+  onJump: () => void;
+}) {
+  // Worst first. A risk list that buries the severe item is decoration.
+  const order = { high: 0, medium: 1, low: 2 };
+  const items = [...arr(risks)].sort(
+    (a, b) => order[a.severity ?? 'low'] - order[b.severity ?? 'low'],
+  );
+
+  if (items.length === 0) {
+    return <EmptyHint>No risk could be grounded in the retrieved evidence.</EmptyHint>;
+  }
+
+  return (
+    <ul className="space-y-4">
+      {items.map((r, i) => (
+        <li key={`${r.risk}-${i}`}>
+          <div className="flex items-start gap-2.5">
+            <Badge tone={SEVERITY_TONE[r.severity ?? 'low']} className="mt-0.5 shrink-0">
+              {r.severity ?? 'low'}
+            </Badge>
+            <p className="text-pretty text-sm leading-relaxed text-slate-200">{r.risk}</p>
+          </div>
+          {hasText(r.rationale) && (
+            <p className="mt-1.5 text-pretty text-xs leading-relaxed text-slate-500">
+              {r.rationale}
+            </p>
+          )}
+          <Cites indices={r.derived_from} sources={sources} onJump={onJump} />
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 export function CompanyProfile({ result, query, duration, cached }: Props) {
   const [tab, setTab] = useState('overview');
   const [copied, setCopied] = useState(false);
@@ -170,8 +309,18 @@ export function CompanyProfile({ result, query, duration, cached }: Props) {
 
   const unverifiedCount = (result.recent_news ?? []).filter((n) => n.verified === false).length;
 
+  const analysis = result.analysis;
+  const analysisCount = analysis
+    ? arr(analysis.why_now).length +
+      arr(analysis.competitive_position).length +
+      arr(analysis.moat).length +
+      arr(analysis.risks).length +
+      arr(analysis.non_obvious).length
+    : 0;
+
   const tabs = [
     { id: 'overview', label: 'Overview', icon: Building2 },
+    { id: 'analysis', label: 'Analysis', icon: Lightbulb, count: analysisCount },
     { id: 'products', label: 'Products', icon: Boxes, count: result.products_and_services?.length },
     { id: 'people', label: 'People', icon: Users, count: result.leadership?.length },
     { id: 'news', label: 'News', icon: Newspaper, count: result.recent_news?.length },
@@ -209,7 +358,9 @@ export function CompanyProfile({ result, query, duration, cached }: Props) {
           <div className="flex flex-wrap items-start gap-5">
             <div
               className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl text-xl font-bold text-white ring-1 ring-inset ring-white/15"
-              style={{ background: `linear-gradient(140deg, hsl(${hue} 70% 45%), hsl(${hue + 45} 70% 32%))` }}
+              style={{
+                background: `linear-gradient(140deg, hsl(${hue} 70% 45%), hsl(${hue + 45} 70% 32%))`,
+              }}
             >
               {initials(info.name ?? query)}
             </div>
@@ -243,7 +394,11 @@ export function CompanyProfile({ result, query, duration, cached }: Props) {
                 onClick={copyJson}
                 className="inline-flex items-center gap-1.5 rounded-lg border border-white/[0.08] px-2.5 py-1.5 text-xs text-slate-400 transition-colors hover:border-white/20 hover:text-slate-100"
               >
-                {copied ? <Check className="h-3 w-3 text-accent-lime" /> : <Copy className="h-3 w-3" />}
+                {copied ? (
+                  <Check className="h-3 w-3 text-accent-lime" />
+                ) : (
+                  <Copy className="h-3 w-3" />
+                )}
                 {copied ? 'Copied' : 'JSON'}
               </button>
             </div>
@@ -269,7 +424,10 @@ export function CompanyProfile({ result, query, duration, cached }: Props) {
               }
             />
             <Field label="Size" value={info.company_size} />
-            <Field label="Sources" value={sources.length ? `${sources.length} retrieved` : undefined} />
+            <Field
+              label="Sources"
+              value={sources.length ? `${sources.length} retrieved` : undefined}
+            />
           </dl>
         </div>
 
@@ -297,7 +455,8 @@ export function CompanyProfile({ result, query, duration, cached }: Props) {
           {unverifiedCount > 0 && (
             <span className="inline-flex items-center gap-1.5 text-accent-amber">
               <AlertTriangle className="h-3 w-3" />
-              {unverifiedCount} claim{unverifiedCount > 1 ? 's' : ''} could not be linked to a source
+              {unverifiedCount} claim{unverifiedCount > 1 ? 's' : ''} could not be linked to a
+              source
             </span>
           )}
         </div>
@@ -307,7 +466,9 @@ export function CompanyProfile({ result, query, duration, cached }: Props) {
         <Card className="border-accent-violet/20 bg-accent-violet/[0.04] p-5">
           <div className="flex items-start gap-3">
             <Lightbulb className="mt-0.5 h-4 w-4 shrink-0 text-accent-violet" />
-            <p className="text-pretty text-sm leading-relaxed text-slate-200">{result.ai_summary}</p>
+            <p className="text-pretty text-sm leading-relaxed text-slate-200">
+              {result.ai_summary}
+            </p>
           </div>
         </Card>
       )}
@@ -367,7 +528,9 @@ export function CompanyProfile({ result, query, duration, cached }: Props) {
                 {hasText(result.target_market) && (
                   <>
                     <div className="hairline my-4 h-px" />
-                    <p className="text-[11px] uppercase tracking-wider text-slate-500">Target market</p>
+                    <p className="text-[11px] uppercase tracking-wider text-slate-500">
+                      Target market
+                    </p>
                     <p className="mt-1 text-sm text-slate-300">{result.target_market}</p>
                   </>
                 )}
@@ -375,7 +538,9 @@ export function CompanyProfile({ result, query, duration, cached }: Props) {
 
               <SectionCard title="Culture and hiring" icon={<Users className="h-4 w-4" />}>
                 {hasText(result.culture_and_values) ? (
-                  <p className="text-sm leading-relaxed text-slate-300">{result.culture_and_values}</p>
+                  <p className="text-sm leading-relaxed text-slate-300">
+                    {result.culture_and_values}
+                  </p>
                 ) : (
                   <EmptyHint>No sourced culture information was found.</EmptyHint>
                 )}
@@ -447,6 +612,162 @@ export function CompanyProfile({ result, query, duration, cached }: Props) {
             </>
           )}
 
+          {/* ------------------------------------------------------ analysis */}
+          {tab === 'analysis' && analysis && (
+            <>
+              <SectionCard
+                title="Thesis"
+                icon={<Target className="h-4 w-4" />}
+                className="lg:col-span-2"
+                actions={
+                  <div className="flex items-center gap-2">
+                    {analysis.analyst_confidence && (
+                      <Badge
+                        tone={
+                          analysis.analyst_confidence === 'high'
+                            ? 'lime'
+                            : analysis.analyst_confidence === 'medium'
+                              ? 'amber'
+                              : 'rose'
+                        }
+                      >
+                        {analysis.analyst_confidence} confidence
+                      </Badge>
+                    )}
+                    {hasText(analysis.generated_by) && (
+                      <span className="hidden text-[11px] text-slate-600 sm:inline">
+                        {analysis.generated_by}
+                      </span>
+                    )}
+                  </div>
+                }
+              >
+                {hasText(analysis.thesis) ? (
+                  <p className="text-pretty text-[15px] leading-relaxed text-slate-100">
+                    {analysis.thesis}
+                  </p>
+                ) : (
+                  <EmptyHint>No single thesis was supportable from this evidence.</EmptyHint>
+                )}
+
+                <div className="mt-4 flex items-start gap-2.5 rounded-xl border border-accent-violet/20 bg-accent-violet/[0.06] p-3">
+                  <Lightbulb className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent-violet" />
+                  <p className="text-pretty text-[11px] leading-relaxed text-slate-400">
+                    This tab is inference, not transcription. Every other tab is copied from a page
+                    the agent actually retrieved. The points here are judgement drawn from those
+                    facts, and each one names the sources it rests on.
+                  </p>
+                </div>
+              </SectionCard>
+
+              <SectionCard
+                title="Why now"
+                icon={<Clock className="h-4 w-4" />}
+                count={arr(analysis.why_now).length}
+              >
+                <PointList
+                  points={analysis.why_now}
+                  sources={sources}
+                  onJump={() => setTab('sources')}
+                />
+              </SectionCard>
+
+              <SectionCard
+                title="Competitive position"
+                icon={<Swords className="h-4 w-4" />}
+                count={arr(analysis.competitive_position).length}
+              >
+                <PointList
+                  points={analysis.competitive_position}
+                  sources={sources}
+                  onJump={() => setTab('sources')}
+                />
+              </SectionCard>
+
+              <SectionCard
+                title="Moat"
+                icon={<ShieldCheck className="h-4 w-4" />}
+                count={arr(analysis.moat).length}
+              >
+                <PointList
+                  points={analysis.moat}
+                  sources={sources}
+                  onJump={() => setTab('sources')}
+                />
+              </SectionCard>
+
+              <SectionCard
+                title="Risks"
+                icon={<ShieldAlert className="h-4 w-4" />}
+                count={arr(analysis.risks).length}
+              >
+                <RiskList
+                  risks={analysis.risks}
+                  sources={sources}
+                  onJump={() => setTab('sources')}
+                />
+              </SectionCard>
+
+              <SectionCard
+                title="Non-obvious"
+                icon={<Lightbulb className="h-4 w-4" />}
+                count={arr(analysis.non_obvious).length}
+                className="lg:col-span-2"
+                actions={
+                  <span className="hidden text-[11px] text-slate-500 sm:inline">
+                    What the obvious summary misses
+                  </span>
+                }
+              >
+                <PointList
+                  points={analysis.non_obvious}
+                  sources={sources}
+                  onJump={() => setTab('sources')}
+                />
+              </SectionCard>
+
+              {(arr(analysis.questions_to_ask).length > 0 || arr(analysis.unknowns).length > 0) && (
+                <div className="grid gap-5 lg:col-span-2 lg:grid-cols-2">
+                  {arr(analysis.questions_to_ask).length > 0 && (
+                    <SectionCard
+                      title="Questions to ask them"
+                      icon={<Activity className="h-4 w-4" />}
+                      count={arr(analysis.questions_to_ask).length}
+                    >
+                      <ol className="space-y-2.5">
+                        {arr(analysis.questions_to_ask).map((q, i) => (
+                          <li key={`${q}-${i}`} className="flex gap-2.5 text-sm text-slate-300">
+                            <span className="select-none font-mono text-xs text-slate-600">
+                              {i + 1}.
+                            </span>
+                            <span className="text-pretty">{q}</span>
+                          </li>
+                        ))}
+                      </ol>
+                    </SectionCard>
+                  )}
+
+                  {arr(analysis.unknowns).length > 0 && (
+                    <SectionCard
+                      title="What could not be established"
+                      icon={<AlertTriangle className="h-4 w-4" />}
+                      count={arr(analysis.unknowns).length}
+                    >
+                      <ul className="space-y-2.5">
+                        {arr(analysis.unknowns).map((u, i) => (
+                          <li key={`${u}-${i}`} className="flex gap-2.5 text-sm text-slate-400">
+                            <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-slate-600" />
+                            <span className="text-pretty">{u}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </SectionCard>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+
           {/* ------------------------------------------------------ products */}
           {tab === 'products' && (
             <>
@@ -470,7 +791,9 @@ export function CompanyProfile({ result, query, duration, cached }: Props) {
                           </span>
                         )}
                         {hasText(p.description) && (
-                          <p className="mt-2 text-xs leading-relaxed text-slate-400">{p.description}</p>
+                          <p className="mt-2 text-xs leading-relaxed text-slate-400">
+                            {p.description}
+                          </p>
                         )}
                       </div>
                     ))}
@@ -529,13 +852,21 @@ export function CompanyProfile({ result, query, duration, cached }: Props) {
                           {initials(person.name)}
                         </div>
                         <div className="min-w-0">
-                          <p className="truncate text-sm font-medium text-slate-100">{person.name}</p>
+                          <p className="truncate text-sm font-medium text-slate-100">
+                            {person.name}
+                          </p>
                           <p className="truncate text-xs text-slate-400">{person.title}</p>
                           {hasText(person.bio) && (
-                            <p className="mt-1.5 text-xs leading-relaxed text-slate-500">{person.bio}</p>
+                            <p className="mt-1.5 text-xs leading-relaxed text-slate-500">
+                              {person.bio}
+                            </p>
                           )}
                           {hasText(person.linkedin_url) && (
-                            <LinkOut href={person.linkedin_url} className="mt-1.5 text-xs" icon={false}>
+                            <LinkOut
+                              href={person.linkedin_url}
+                              className="mt-1.5 text-xs"
+                              icon={false}
+                            >
                               <span className="inline-flex items-center gap-1">
                                 <Linkedin className="h-3 w-3" />
                                 Profile
@@ -547,7 +878,9 @@ export function CompanyProfile({ result, query, duration, cached }: Props) {
                     ))}
                   </div>
                 ) : (
-                  <EmptyHint>No named executives were confirmed by the retrieved sources.</EmptyHint>
+                  <EmptyHint>
+                    No named executives were confirmed by the retrieved sources.
+                  </EmptyHint>
                 )}
               </SectionCard>
             </div>
@@ -561,7 +894,9 @@ export function CompanyProfile({ result, query, duration, cached }: Props) {
                 icon={<Newspaper className="h-4 w-4" />}
                 count={result.recent_news?.length}
                 actions={
-                  <span className="text-[11px] text-slate-500">Verified against retrieved sources</span>
+                  <span className="text-[11px] text-slate-500">
+                    Verified against retrieved sources
+                  </span>
                 }
               >
                 {isNonEmpty(result.recent_news) ? (
