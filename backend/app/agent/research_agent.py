@@ -1,6 +1,7 @@
 import logging
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -117,6 +118,43 @@ def get_tavily_client():
     return TavilyClient(api_key=settings.TAVILY_API_KEY)
 
 
+def _tavily_search(
+    query: str,
+    topic: Optional[str] = None,
+    days: Optional[int] = None,
+) -> List[dict]:
+    """Run one Tavily query and return the raw results.
+
+    Deliberately does not touch the collector. Keeping the network call free of
+    shared mutable state is what makes the deterministic sweep safe to run on a
+    thread pool: results come back to the main thread and are banked there, in a
+    fixed order, so the citation list stays reproducible and no two threads ever
+    write to the collector at once.
+    """
+    client = get_tavily_client()
+    params = {
+        "query": query,
+        "search_depth": "basic",
+        "max_results": settings.MAX_SEARCH_RESULTS,
+        "include_answer": False,
+    }
+    if topic:
+        params["topic"] = topic
+
+    if days is not None:
+        try:
+            # tavily-python defaults topic="news" to days=3, so "recent news"
+            # silently meant "the last 72 hours". Ask for a real window.
+            response = client.search(**params, days=days)
+            return (response or {}).get("results", []) or []
+        except TypeError:
+            # Older tavily-python builds do not accept `days`.
+            pass
+
+    response = client.search(**params)
+    return (response or {}).get("results", []) or []
+
+
 # ─── LangChain Tools ────────────────────
 
 def build_research_tools(collector: SourceCollector) -> list:
@@ -136,14 +174,7 @@ def build_research_tools(collector: SourceCollector) -> list:
     def web_search(query: str) -> str:
         """Search the web for information about a company. Use for general research."""
         try:
-            client = get_tavily_client()
-            response = client.search(
-                query=query,
-                search_depth="basic",
-                max_results=settings.MAX_SEARCH_RESULTS,
-                include_answer=False,
-            )
-            results = response.get("results", []) or []
+            results = _tavily_search(query)
             # Every result is banked for provenance; only a slice is shown to
             # the model. Provenance is free, prompt tokens are not.
             collector.add_many(results, kind="web")
@@ -160,26 +191,11 @@ def build_research_tools(collector: SourceCollector) -> list:
     def search_news(company_name: str) -> str:
         """Search for recent news articles about the company."""
         try:
-            client = get_tavily_client()
-            params = {
-                # No hardcoded years. The old query pinned "2024 2025" into the
-                # search string, which biased the index toward stale articles.
-                "query": f"{company_name} news",
-                "topic": "news",
-                "search_depth": "basic",
-                "max_results": settings.MAX_SEARCH_RESULTS,
-                "include_answer": False,
-            }
-            try:
-                # tavily-python defaults topic="news" to days=3, so "recent
-                # news" silently meant "the last 72 hours" and usually returned
-                # nothing. Ask for a real window.
-                response = client.search(**params, days=settings.NEWS_RECENCY_DAYS)
-            except TypeError:
-                # Older tavily-python builds do not accept `days`.
-                response = client.search(**params)
-
-            results = response.get("results", []) or []
+            results = _tavily_search(
+                f"{company_name} news",
+                topic="news",
+                days=settings.NEWS_RECENCY_DAYS,
+            )
             collector.add_many(results, kind="news")
             return format_search_results(
                 results,
@@ -223,6 +239,9 @@ class CompanyResearchAgent:
     def __init__(self):
         self.collector = SourceCollector(max_sources=settings.MAX_SOURCES)
         self._degraded = False
+        # Written by the direct sweep, read back when the brief is rebuilt.
+        self._searches_run: List[str] = []
+        self._site_text = ""
 
         self.llm = get_llm()
         self.tools = build_research_tools(self.collector)
@@ -264,6 +283,8 @@ class CompanyResearchAgent:
         start_time = time.time()
         self.collector.reset()
         self._degraded = False
+        self._searches_run = []
+        self._site_text = ""
 
         company_name, website_url, is_url = resolve_query(query)
         logger.info(
@@ -297,6 +318,57 @@ class CompanyResearchAgent:
     # ─── Stage 1: gather ────────────────────
 
     def _gather(self, company_name: str, website_url: str, depth: str) -> str:
+        """Collect evidence and return the brief that stage 2 reads.
+
+        Three strategies, selected by GATHER_MODE.
+
+        ``direct`` (default) runs the planned queries straight from Python.
+        ``build_search_queries`` already decides what to search for; handing
+        that list to a model so it can read it back as tool calls added a
+        failure mode and nothing else. Groq's Llama tool parser intermittently
+        emits ``<function=web_search {...}>`` where the API expects
+        ``<function=web_search>{...}``, and rejects the whole request with a
+        400 ``tool_use_failed`` before a single search has run.
+
+        It is also better research. The ReAct loop had a budget of 3-8 tool
+        calls and spent them on the descriptive queries, so the signal queries -
+        hiring, executive departures, pricing changes, layoffs, complaints -
+        usually never ran. Those are the only queries that give stage 4 anything
+        to reason from. Now every one of them runs, every time.
+
+        ``agent`` is the original ReAct loop, kept intact and reachable.
+
+        ``hybrid`` sweeps first, then lets the loop chase follow-ups. A failure
+        in the follow-up is logged and discarded, because the sweep already
+        stands on its own.
+        """
+        mode = (settings.GATHER_MODE or "direct").strip().lower()
+        if mode not in ("direct", "agent", "hybrid"):
+            logger.warning(f"Unknown GATHER_MODE '{mode}'; using direct")
+            mode = "direct"
+
+        if mode == "agent":
+            return self._gather_agent(company_name, website_url, depth)
+
+        brief = self._gather_direct(company_name, website_url, depth)
+
+        if mode == "hybrid":
+            before = len(self.collector)
+            try:
+                self._gather_agent(company_name, website_url, depth)
+            except Exception as exc:
+                logger.warning(
+                    f"Hybrid follow-up failed, keeping the sweep "
+                    f"({type(exc).__name__}: {exc})"
+                )
+            gained = len(self.collector) - before
+            if gained:
+                logger.info(f"Hybrid follow-up added {gained} sources")
+                brief = self._brief_from_collector(company_name, website_url)
+
+        return brief
+
+    def _gather_agent(self, company_name: str, website_url: str, depth: str) -> str:
         """Run the tool-using agent and return a plain-text research brief."""
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         url_context = f" Their website is {website_url}." if website_url else ""
@@ -362,6 +434,169 @@ Do NOT output JSON. A separate step handles formatting.
                 f"Falling back to {len(self.collector)} collected sources."
             )
             return self._brief_from_sources(company_name)
+
+    def _gather_direct(self, company_name: str, website_url: str, depth: str) -> str:
+        """Deterministic evidence sweep. No model, no tool calling, no chance
+        of a malformed function call.
+        """
+        budget = {
+            "quick": settings.DIRECT_SEARCHES_QUICK,
+            "standard": settings.DIRECT_SEARCHES_STANDARD,
+            "deep": settings.DIRECT_SEARCHES_DEEP,
+        }.get(depth, settings.DIRECT_SEARCHES_STANDARD)
+
+        planned = build_search_queries(company_name, website_url, depth)
+        planned = planned[: max(1, int(budget))]
+
+        jobs: List[dict] = [{"kind": "web", "label": q, "query": q} for q in planned]
+        jobs.append(
+            {
+                "kind": "news",
+                "label": f"{company_name} news (last {settings.NEWS_RECENCY_DAYS} days)",
+                "query": f"{company_name} news",
+                "topic": "news",
+                "days": settings.NEWS_RECENCY_DAYS,
+            }
+        )
+
+        def run(job: dict):
+            try:
+                results = _tavily_search(
+                    job["query"], topic=job.get("topic"), days=job.get("days")
+                )
+                return job, results, None
+            except Exception as exc:  # noqa: BLE001 - reported per query below
+                return job, [], exc
+
+        workers = max(1, min(int(settings.GATHER_CONCURRENCY or 1), len(jobs)))
+        started = time.time()
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            # map preserves input order, so the citation list is deterministic
+            # even though the calls themselves race.
+            outcomes = list(pool.map(run, jobs))
+
+        config_error = None
+        succeeded = []
+        self._searches_run = []
+        for job, results, exc in outcomes:
+            if exc is not None:
+                if isinstance(exc, ValueError):
+                    config_error = exc
+                logger.warning(
+                    f"Search failed [{job['label']}]: {type(exc).__name__}: {exc}"
+                )
+                continue
+            succeeded.append((job, results))
+            self._searches_run.append(job["label"])
+
+        # Bank round-robin, not query by query. MAX_SOURCES caps the collector
+        # and the signal queries are planned last, so a sequential bank would
+        # spend the entire budget on the descriptive queries and discard exactly
+        # the evidence stage 4 needs. This way every query lands its top hit
+        # before any query lands its second.
+        rank = 0
+        while succeeded:
+            progressed = False
+            for job, results in succeeded:
+                if rank < len(results):
+                    self.collector.add_many([results[rank]], kind=job["kind"])
+                    progressed = True
+            if not progressed:
+                break
+            rank += 1
+
+        logger.info(
+            f"Direct sweep: {len(self._searches_run)}/{len(jobs)} searches in "
+            f"{time.time() - started:.1f}s -> {len(self.collector)} unique sources "
+            f"across {len(self.collector.domains)} domains"
+        )
+
+        self._site_text = ""
+        if website_url and settings.SCRAPE_HOMEPAGE:
+            content = scrape_website(website_url, max_chars=settings.MAX_SCRAPE_CHARS)
+            if content and not content.startswith("Error:"):
+                self.collector.add(website_url, kind="scrape")
+                self._site_text = content
+            else:
+                logger.info(f"Homepage fetch skipped: {str(content)[:140]}")
+
+        if len(self.collector) == 0 and not self._site_text:
+            # Nothing came back at all. A missing or rejected Tavily key is by
+            # far the most common cause, and routes.py renders ValueError as a
+            # configuration problem rather than a research failure.
+            if config_error is not None:
+                raise config_error
+            raise ValueError(
+                "No sources retrieved: every search failed. Check TAVILY_API_KEY "
+                "and outbound network access."
+            )
+
+        return self._brief_from_collector(company_name, website_url)
+
+    def _brief_from_collector(self, company_name: str, website_url: str) -> str:
+        """Render the retrieved evidence as the brief stage 2 will transcribe.
+
+        This replaces a model-written summary with the retrieved text itself.
+        The old pipeline had two lossy hops - the loop paraphrased search results
+        into prose, then the extractor transcribed that prose - so every fact had
+        two chances to drift. Stage 2 now reads what the index actually returned.
+        """
+        details = self.collector.details()
+        web = [r for r in details if r.get("kind") != "news"]
+        news = [r for r in details if r.get("kind") == "news"]
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+        lines: List[str] = [
+            f"Evidence brief for {company_name}, assembled {today}.",
+            (
+                f"{len(details)} unique sources across "
+                f"{len(self.collector.domains)} domains, retrieved by "
+                f"{len(self._searches_run)} live searches."
+            ),
+            "",
+            "Every URL, title, date and snippet below was returned by a search",
+            "index or fetched from the page itself. Nothing here is recalled from",
+            "memory, so an absent fact was genuinely not retrieved.",
+            "",
+        ]
+
+        if self._searches_run:
+            lines.append("=== SEARCHES RUN ===")
+            lines.extend(f"- {label}" for label in self._searches_run)
+            lines.append("")
+
+        index = 0
+        for heading, group in (("WEB RESULTS", web), ("NEWS RESULTS", news)):
+            if not group:
+                continue
+            lines.append(f"=== {heading} ===")
+            for record in group:
+                index += 1
+                lines.append(f"[{index}] {record.get('title') or 'Untitled'}")
+                lines.append(f"URL: {record['url']}")
+                published = record.get("published_date")
+                if published:
+                    age = humanize_age(days_since(published))
+                    suffix = f" ({age})" if age else ""
+                    lines.append(f"Published: {published}{suffix}")
+                else:
+                    lines.append("Published: not stated by the source")
+                if record.get("snippet"):
+                    lines.append(record["snippet"])
+                lines.append("")
+            lines.append("")
+
+        if self._site_text:
+            lines.append("=== COMPANY WEBSITE (fetched directly) ===")
+            lines.append(self._site_text)
+            lines.append("")
+
+        brief = "\n".join(lines).strip()
+        cap = max(2000, int(settings.BRIEF_MAX_CHARS or 14000))
+        if len(brief) > cap:
+            brief = brief[:cap].rsplit("\n", 1)[0]
+            brief += "\n[Evidence brief truncated to fit the model input budget.]"
+        return brief
 
     def _brief_from_sources(self, company_name: str) -> str:
         """Assemble a brief straight from retrieved evidence.
