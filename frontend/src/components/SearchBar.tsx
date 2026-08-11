@@ -25,9 +25,9 @@ const DEPTHS: Array<{
   time: string;
   icon: typeof Zap;
 }> = [
-  { id: 'quick', label: 'Quick', blurb: '3 tool calls', time: '~20s', icon: Zap },
-  { id: 'standard', label: 'Standard', blurb: '5 tool calls', time: '~45s', icon: Gauge },
-  { id: 'deep', label: 'Deep', blurb: '8 tool calls', time: '~90s', icon: Sparkles },
+  { id: 'quick', label: 'Quick', blurb: '5 searches', time: '~20s', icon: Zap },
+  { id: 'standard', label: 'Standard', blurb: '10 searches', time: '~40s', icon: Gauge },
+  { id: 'deep', label: 'Deep', blurb: '17 searches', time: '~80s', icon: Sparkles },
 ];
 
 const EXAMPLES = ['Stripe', 'notion.so', 'Anthropic', 'Figma', 'Vercel'];
