@@ -36,6 +36,28 @@ function diagnose(error: string) {
     };
   }
 
+  // Groq's Llama tool parser intermittently emits <function=web_search {...}>
+  // where the API expects <function=web_search>{...}, and rejects the request
+  // before a single search has run. GATHER_MODE=direct takes the model out of
+  // the retrieval path entirely, so the failure cannot recur.
+  if (
+    e.includes('tool call validation failed') ||
+    e.includes('tool_use_failed') ||
+    e.includes('failed_generation')
+  ) {
+    return {
+      icon: ServerCrash,
+      tone: 'text-accent-amber',
+      title: 'The model garbled a tool call',
+      steps: [
+        'A provider-side syntax bug, not a problem with your query',
+        'Open backend/.env and set GATHER_MODE=direct',
+        'That runs the searches from Python, with no tool calling at all',
+        'Restart uvicorn, then retry',
+      ],
+    };
+  }
+
   if (e.includes('cannot reach') || e.includes('network') || e.includes('port 8000')) {
     return {
       icon: WifiOff,

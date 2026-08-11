@@ -5,7 +5,7 @@ from functools import lru_cache
 class Settings(BaseSettings):
     # App
     APP_NAME: str = "Company Research Assistant"
-    APP_VERSION: str = "1.2.0"
+    APP_VERSION: str = "1.3.0"
     DEBUG: bool = False
 
     # API Keys
@@ -68,7 +68,33 @@ class Settings(BaseSettings):
     RESEARCH_TIMEOUT_SECONDS: int = 120
     # Max ReAct turns before LangGraph aborts. Each turn resends the full
     # message history, so raising this increases token usage superlinearly.
+    # Only consulted in GATHER_MODE=agent|hybrid.
     AGENT_RECURSION_LIMIT: int = 8
+
+    # Stage 1 retrieval strategy.
+    #   direct - run the planned queries from Python. Deterministic, and immune
+    #            to the provider tool-syntax defect that returns HTTP 400
+    #            tool_use_failed before any search has run.
+    #   agent  - the original ReAct loop.
+    #   hybrid - direct sweep first, then the loop chases follow-ups. A failure
+    #            in the follow-up never discards the sweep.
+    GATHER_MODE: str = "direct"
+    # Searches executed per depth in direct mode. These are Tavily calls, not
+    # LLM calls: they cost no prompt tokens, so the budget can be generous.
+    # The ReAct loop could only afford 3-8, which is why the signal queries
+    # (hiring, departures, pricing, layoffs, complaints) almost never ran.
+    DIRECT_SEARCHES_QUICK: int = 5
+    DIRECT_SEARCHES_STANDARD: int = 10
+    DIRECT_SEARCHES_DEEP: int = 17
+    # Searches run in parallel. Results are banked on the main thread
+    # afterwards, so the collector is never mutated concurrently.
+    GATHER_CONCURRENCY: int = 4
+    # Fetch the company's own site during the sweep.
+    SCRAPE_HOMEPAGE: bool = True
+    # Hard cap on the evidence brief handed to stage 2, in characters. Roughly
+    # four characters per token, so 14000 is about 3,500 prompt tokens. Lower
+    # this first if extraction starts returning HTTP 413.
+    BRIEF_MAX_CHARS: int = 14000
 
     # Cache
     ENABLE_CACHE: bool = True
