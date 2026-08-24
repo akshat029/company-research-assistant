@@ -1,5 +1,5 @@
-from pydantic import BaseModel, Field, HttpUrl
-from typing import Optional, List, Dict, Any
+from pydantic import BaseModel, Field
+from typing import Optional, List
 from enum import Enum
 
 
@@ -13,12 +13,17 @@ class ResearchStatus(str, Enum):
 class ResearchRequest(BaseModel):
     query: str = Field(..., description="Company name or website URL", min_length=1, max_length=500)
     depth: str = Field(default="standard", description="Research depth: quick | standard | deep")
+    include_analysis: bool = Field(
+        default=True,
+        description="Run the analyst stage. Costs one extra LLM call per request.",
+    )
 
     class Config:
         json_schema_extra = {
             "example": {
                 "query": "OpenAI",
-                "depth": "standard"
+                "depth": "standard",
+                "include_analysis": True
             }
         }
 
@@ -57,6 +62,12 @@ class NewsItem(BaseModel):
     date: Optional[str] = None
     source: Optional[str] = None
     sentiment: Optional[str] = None  # positive | neutral | negative
+    # Server-controlled. The extraction model must leave this alone; the agent
+    # overwrites it after checking the URL against the pages actually fetched.
+    verified: Optional[bool] = Field(
+        default=None,
+        description="Leave null. Set by the server after source verification.",
+    )
 
 
 class FundingRound(BaseModel):
@@ -95,48 +106,108 @@ class SocialMedia(BaseModel):
     github: Optional[str] = None
 
 
-class CompanyResearchResult(BaseModel):
-    # Core
+class SwotAnalysis(BaseModel):
+    """Four explicit lists instead of ``Dict[str, List[str]]``.
+
+    An open-ended mapping compiles to a JSON Schema with no fixed properties,
+    which Groq rejects for structured output. That rejection is what triggered
+    the "Structured output unavailable, using text fallback" log line and sent
+    every request down the fragile hand-written-JSON path. The wire format is
+    unchanged, so the frontend needs no migration.
+    """
+
+    strengths: List[str] = Field(default_factory=list)
+    weaknesses: List[str] = Field(default_factory=list)
+    opportunities: List[str] = Field(default_factory=list)
+    threats: List[str] = Field(default_factory=list)
+
+
+class SourceRef(BaseModel):
+    """A page the agent actually retrieved. Built by the server, never by the LLM."""
+
+    url: str
+    title: Optional[str] = None
+    domain: Optional[str] = None
+    published_date: Optional[str] = None
+    kind: Optional[str] = None  # web | news | scrape
+
+
+class AnalysisPoint(BaseModel):
+    """One analytical claim, tied back to the evidence that supports it."""
+
+    point: str
+    rationale: Optional[str] = None
+    # Indices into the result's ``source_details`` list. The server drops any
+    # index that is out of range, so a fabricated citation cannot survive.
+    derived_from: List[int] = Field(default_factory=list)
+    confidence: Optional[str] = None  # high | medium | low
+
+
+class RiskItem(BaseModel):
+    risk: str
+    severity: Optional[str] = None  # high | medium | low
+    rationale: Optional[str] = None
+    derived_from: List[int] = Field(default_factory=list)
+
+
+class CompanyAnalysis(BaseModel):
+    """Stage 4 output: inference, clearly fenced off from transcribed fact.
+
+    Everything in ``CompanyResearchExtraction`` is copied from retrieved pages.
+    Everything here is judgement derived from it. Keeping them in separate
+    models is what lets the UI draw an honest line between the two, instead of
+    blending sourced facts and opinion into one indistinguishable page.
+    """
+
+    thesis: Optional[str] = None
+    why_now: List[AnalysisPoint] = Field(default_factory=list)
+    competitive_position: List[AnalysisPoint] = Field(default_factory=list)
+    moat: List[AnalysisPoint] = Field(default_factory=list)
+    risks: List[RiskItem] = Field(default_factory=list)
+    non_obvious: List[AnalysisPoint] = Field(default_factory=list)
+    questions_to_ask: List[str] = Field(default_factory=list)
+    unknowns: List[str] = Field(default_factory=list)
+    analyst_confidence: Optional[str] = None  # high | medium | low
+    # Named ``generated_by`` rather than ``model_*``: Pydantic v2 reserves the
+    # ``model_`` prefix and warns on fields that use it.
+    generated_by: Optional[str] = None
+
+
+class CompanyResearchExtraction(BaseModel):
+    """The schema the LLM is asked to fill.
+
+    Deliberately excludes sources, timestamps and confidence. Those are facts
+    about the *research run*, not about the company, and the server knows them
+    exactly. Leaving them out removes the model's opportunity to invent them
+    and shrinks the schema that has to survive the token budget.
+    """
+
     basic_info: Optional[CompanyBasicInfo] = None
-    
-    # Products & Services
     products_and_services: Optional[List[ProductService]] = None
-    
-    # People
     leadership: Optional[List[LeadershipMember]] = None
-    
-    # News
     recent_news: Optional[List[NewsItem]] = None
-    
-    # Financial
     financial_info: Optional[FinancialInfo] = None
-    
-    # Market
     competitors: Optional[List[Competitor]] = None
     market_position: Optional[str] = None
     target_market: Optional[str] = None
-    
-    # Tech
     tech_stack: Optional[List[TechStackItem]] = None
-    
-    # Social
     social_media: Optional[SocialMedia] = None
-    
-    # Culture
     culture_and_values: Optional[str] = None
-    
-    # Jobs
     hiring_status: Optional[str] = None
     open_roles_summary: Optional[str] = None
-    
-    # Analysis
-    swot_analysis: Optional[Dict[str, List[str]]] = None  # strengths, weaknesses, opportunities, threats
+    swot_analysis: Optional[SwotAnalysis] = None
     ai_summary: Optional[str] = None
+
+
+class CompanyResearchResult(CompanyResearchExtraction):
+    """What the API returns: the extraction plus server-computed provenance."""
+
     research_confidence: Optional[str] = None  # high | medium | low
-    
-    # Meta
     sources: Optional[List[str]] = None
+    source_details: Optional[List[SourceRef]] = None
+    data_freshness: Optional[str] = None
     researched_at: Optional[str] = None
+    analysis: Optional[CompanyAnalysis] = None
 
 
 class ResearchResponse(BaseModel):

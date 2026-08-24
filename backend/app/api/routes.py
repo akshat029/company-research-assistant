@@ -38,17 +38,29 @@ async def research_company(request: ResearchRequest, settings: Settings = Depend
     
     - **query**: Company name (e.g. "OpenAI") or website URL (e.g. "https://openai.com")
     - **depth**: Research depth - "quick" (fast overview), "standard" (thorough), "deep" (exhaustive)
+    - **include_analysis**: run the analyst stage. Costs one extra LLM call.
     """
     start_time = time.time()
     query = request.query.strip()
     depth = request.depth
+    # The server-side switch wins: if analysis is disabled globally, a request
+    # cannot turn it back on.
+    include_analysis = bool(request.include_analysis and settings.ENABLE_ANALYSIS)
 
-    logger.info(f"Research request: query='{query}', depth='{depth}'")
+    logger.info(
+        f"Research request: query='{query}', depth='{depth}', "
+        f"analysis={include_analysis}"
+    )
+
+    # The analysis toggle is part of the cache identity. Without it, a cached
+    # facts-only run would be served to a request that asked for analysis and
+    # the Analysis tab would come back mysteriously empty.
+    cache_variant = f"{depth}+analysis" if include_analysis else depth
 
     # Check cache
     if settings.ENABLE_CACHE:
         cache = get_cache(settings.CACHE_TTL_SECONDS)
-        cached_result = cache.get(query, depth)
+        cached_result = cache.get(query, cache_variant)
         if cached_result:
             return ResearchResponse(
                 status=ResearchStatus.COMPLETED,
@@ -61,12 +73,14 @@ async def research_company(request: ResearchRequest, settings: Settings = Depend
     # Run research
     try:
         agent = get_research_agent()
-        result = agent.research(query=query, depth=depth)
+        result = agent.research(
+            query=query, depth=depth, include_analysis=include_analysis
+        )
 
         # Cache result
         if settings.ENABLE_CACHE:
             cache = get_cache(settings.CACHE_TTL_SECONDS)
-            cache.set(query, depth, result)
+            cache.set(query, cache_variant, result)
 
         duration = round(time.time() - start_time, 2)
         logger.info(f"Research completed: query='{query}', duration={duration}s")
@@ -105,7 +119,7 @@ async def get_example_queries():
         "examples": [
             {"query": "OpenAI", "description": "AI research company"},
             {"query": "Stripe", "description": "Payments infrastructure"},
-            {"query": "https://notion.so", "description": "Productivity app (URL input)"},
+            {"query": "notion.so", "description": "Productivity app (URL input)"},
             {"query": "Anthropic", "description": "AI safety company"},
             {"query": "Figma", "description": "Design tool"},
             {"query": "Vercel", "description": "Frontend deployment platform"},

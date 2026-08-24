@@ -1,6 +1,8 @@
 export interface ResearchRequest {
   query: string;
   depth: 'quick' | 'standard' | 'deep';
+  /** Run the analyst stage. Costs one extra LLM call on the backend. */
+  include_analysis?: boolean;
 }
 
 export interface CompanyBasicInfo {
@@ -37,6 +39,12 @@ export interface NewsItem {
   date?: string;
   source?: string;
   sentiment?: 'positive' | 'neutral' | 'negative';
+  /**
+   * Set by the backend, never by the model. `true` means the link was actually
+   * returned by the search index; `false` means the model asserted the story
+   * but no retrieved source backs it, so the UI must not render it as a link.
+   */
+  verified?: boolean;
 }
 
 export interface FundingRound {
@@ -82,6 +90,58 @@ export interface SwotAnalysis {
   threats: string[];
 }
 
+/** A source the backend actually retrieved, with its real publication date. */
+export interface SourceRef {
+  url: string;
+  title?: string;
+  domain?: string;
+  published_date?: string;
+  kind?: string;
+}
+
+/**
+ * One analytical claim.
+ *
+ * `derived_from` holds indices into `source_details`. The backend drops any
+ * index that does not resolve, so an index present here always points at a
+ * real, retrieved source.
+ */
+export interface AnalysisPoint {
+  point: string;
+  rationale?: string;
+  derived_from: number[];
+  confidence?: 'high' | 'medium' | 'low';
+}
+
+export interface RiskItem {
+  risk: string;
+  severity?: 'high' | 'medium' | 'low';
+  rationale?: string;
+  derived_from: number[];
+}
+
+/**
+ * Stage 4 output: inference, deliberately kept in its own object.
+ *
+ * Every other field on `CompanyResearchResult` was transcribed from a page that
+ * was actually retrieved. Everything here is judgement derived from those
+ * facts. They are modelled apart so the UI can keep the distinction visible
+ * rather than blending sourced fact and opinion into one page.
+ */
+export interface CompanyAnalysis {
+  thesis?: string;
+  why_now: AnalysisPoint[];
+  competitive_position: AnalysisPoint[];
+  moat: AnalysisPoint[];
+  risks: RiskItem[];
+  non_obvious: AnalysisPoint[];
+  questions_to_ask: string[];
+  unknowns: string[];
+  analyst_confidence?: 'high' | 'medium' | 'low';
+  /** Which model produced this read. */
+  generated_by?: string;
+}
+
 export interface CompanyResearchResult {
   basic_info?: CompanyBasicInfo;
   products_and_services?: ProductService[];
@@ -100,7 +160,13 @@ export interface CompanyResearchResult {
   ai_summary?: string;
   research_confidence?: 'high' | 'medium' | 'low';
   sources?: string[];
+  /** Richer view of `sources`, including titles and real publication dates. */
+  source_details?: SourceRef[];
+  /** Human-readable age of the freshest retrieved source, e.g. "12 days old". */
+  data_freshness?: string;
   researched_at?: string;
+  /** Present only when the analyst stage ran and succeeded. */
+  analysis?: CompanyAnalysis;
 }
 
 export interface ResearchResponse {
@@ -110,6 +176,13 @@ export interface ResearchResponse {
   error?: string;
   duration_seconds?: number;
   cached: boolean;
+}
+
+export interface HealthResponse {
+  status: string;
+  version: string;
+  llm_provider: string;
+  cache_enabled: boolean;
 }
 
 export type DepthOption = 'quick' | 'standard' | 'deep';
